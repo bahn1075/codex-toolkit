@@ -107,6 +107,10 @@ Mem0의 LM Studio provider와 JSON schema를 사용하며, 추출 JSON이 잘못
 
 큐·추출 대기 데이터·완료 지점은 `~/.codex/toolkit/mem0-sessions/`에 저장됩니다
 (디렉터리 700, 데이터 파일 600). `worker.log`에서 성공·실패를 확인할 수 있습니다.
+`OK` 뒤의 `messages`는 읽은 대화 수, `llm_calls`는 사실 추출 호출 수,
+`inserted`는 Oracle 저장 확인 건수입니다. 모두 0이면 모델 호출·신규 저장 없이
+완료된 작업입니다. 이전 `user_message`/`agent_message`와 현재
+`item_completed`의 `UserMessage`/`AgentMessage` 기록 형식을 지원합니다.
 실패 원인을 수정한 뒤 수동 재시도할 수도 있습니다:
 
 ```bash

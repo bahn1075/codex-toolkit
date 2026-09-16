@@ -4,6 +4,7 @@ import fcntl
 import contextlib
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -101,6 +102,15 @@ def batches(path, session, checkpoint, end):
             digest.update(raw)
             payload = record.get('payload', {})
             if record.get('type') == 'event_msg':
+                if payload.get('type') == 'item_completed':
+                    item = payload.get('item', {})
+                    if item.get('type') in ('UserMessage', 'AgentMessage'):
+                        payload = {
+                            'type': 'user_message' if item['type'] == 'UserMessage' else 'agent_message',
+                            'phase': item.get('phase'),
+                            'message': '\n'.join(part['text'] for part in item.get('content', [])
+                                                 if part.get('type') in ('text', 'Text') and isinstance(part.get('text'), str)),
+                        }
                 kind = payload.get('type')
                 if kind == 'user_message' or (kind == 'agent_message' and payload.get('phase') in ('final', 'final_answer')):
                     text = redact(payload['message'])
@@ -120,6 +130,7 @@ def batches(path, session, checkpoint, end):
 def process_job(job_path, store_factory=None):
     from mem0_mcp import extract_facts, memory
     job = json.loads(job_path.read_text())
+    stats = {'messages': 0, 'llm_calls': 0, 'inserted': 0}
     session = job['session']
     cursor_path = STATE / f'{session}.cursor.json'
     cursor = json.loads(cursor_path.read_text()) if cursor_path.exists() else {}
@@ -133,10 +144,11 @@ def process_job(job_path, store_factory=None):
         path = HOME / 'archived_sessions' / path.name
     if job['end'] <= cursor.get('offset', 0):
         job_path.unlink()
-        return
+        return stats
     store = None
     for messages, next_cursor in batches(path, session, cursor, job['end']):
         if messages:
+            stats['messages'] += len(messages)
             if store is None:
                 store = (store_factory or memory)()
             # Persist extracted facts before inserts so retries never re-extract this batch.
@@ -147,6 +159,7 @@ def process_job(job_path, store_factory=None):
                     raise ValueError('Pending batch mismatch; refusing to skip unsaved facts')
             else:
                 pending = {'batch': batch_id, 'facts': extract_facts(store, messages)}
+                stats['llm_calls'] += 1
                 write_json(pending_path, pending)
             for index, fact in enumerate(pending['facts']):
                 key = hashlib.sha256(f'{batch_id}:{index}'.encode()).hexdigest()
@@ -157,14 +170,18 @@ def process_job(job_path, store_factory=None):
                                        metadata={'toolkit_fact_id': key, 'codex_session_id': session})
                     if not result.get('results') or not store.get_all(filters=filters)['results']:
                         raise RuntimeError('Mem0 insert was not confirmed in Oracle')
+                    stats['inserted'] += len(result['results'])
             write_json(cursor_path, next_cursor)
             pending_path.unlink()
         else:
             write_json(cursor_path, next_cursor)
     job_path.unlink()
+    return stats
 
 
 def drain():
+    # Provider background threads must not retain redirected/closed log streams.
+    logging.disable(logging.CRITICAL)
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     # ponytail: one worker processes all sessions serially to avoid duplicate inserts;
     # use per-session locks if queue throughput becomes a bottleneck.
@@ -177,8 +194,8 @@ def drain():
                 continue
             try:
                 with open(os.devnull, 'w') as quiet, contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
-                    process_job(job_path)
-                print(f'OK {job_path.name}', flush=True)
+                    stats = process_job(job_path)
+                print(f'OK {job_path.name} {json.dumps(stats)}', flush=True)
             except Exception as error:
                 failed.add(session)
                 # Keep provider errors and conversation text out of the persistent log.

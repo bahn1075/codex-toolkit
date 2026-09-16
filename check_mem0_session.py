@@ -96,6 +96,21 @@ with tempfile.TemporaryDirectory() as tmp:
         assert store.calls == calls and extract.call_count == attempts
         assert not job.exists() and not list(state.glob('*.pending.json'))
 
+        append('event_msg', {'type': 'item_completed', 'item': {
+            'type': 'UserMessage', 'content': [{'type': 'text', 'text': 'New wire format user.'},
+                                             {'type': 'image', 'image_url': 'ignored'}]}})
+        append('event_msg', {'type': 'item_completed', 'item': {
+            'type': 'AgentMessage', 'phase': 'final_answer',
+            'content': [{'type': 'Text', 'text': 'New wire format answer.'}]}})
+        append('event_msg', {'type': 'item_completed', 'item': {
+            'type': 'AgentMessage', 'phase': 'commentary',
+            'content': [{'type': 'Text', 'text': 'Excluded progress.'}]}})
+        stats = s.process_job(queue(), lambda: store)
+        assert stats == {'messages': 2, 'llm_calls': 1, 'inserted': 2}
+        assert [x['content'] for x in extract.call_args.args[1]] == [
+            'New wire format user.', 'New wire format answer.']
+        assert s.process_job(queue(), lambda: store) == {'messages': 0, 'llm_calls': 0, 'inserted': 0}
+
         event('user_message', 'Malformed tail must not advance checkpoint.')
         with transcript.open('a') as out:
             out.write('{')
