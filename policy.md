@@ -27,7 +27,9 @@ symbols, references and precise edits; use Graft for repository maps and call
 relationships. Small file/config tasks need not initialize a code project.
 
 Graft MCP is bound to its startup repository. Verify returned paths match this
-thread's workspace. It deliberately refuses to start outside a Git repository.
+thread's workspace. The toolkit prepares a missing structural index before MCP
+starts. Outside a Git repository it connects idle with no tools; it never indexes
+the home directory automatically.
 If the IDE started its MCP processes elsewhere, treat that Graft instance as
 unavailable for this task; use the installed `graft` CLI with the shell working
 directory set to the actual repository. Run `graft build` yourself when needed.

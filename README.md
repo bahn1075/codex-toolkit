@@ -46,7 +46,7 @@ Mem0 MCP 도구는 바로 사용할 수 있습니다. 세션 종료 시 자동 �
 | Serena | `uv tool install --python … serena-agent` | 전역 stdio MCP, 대시보드·브라우저 자동 열기 비활성화, 현재 작업 프로젝트 활성화는 Codex가 처리 |
 | Ponytail | 공식 Git 저장소 clone | 배포 저장소의 `AGENTS.md`를 전역 `AGENTS.md`의 관리 블록에 반영 |
 | Superpowers | `codex plugin add superpowers@openai-curated-remote` | 설치·업데이트 시 공식 플러그인 설치 시도. 로그인 및 워크스페이스 관리자 허용 필요 |
-| Graft | private npm prefix의 `@nanonets/graft` | MCP 등록, 신규 설치 시 기본 비활성화. Git 프로젝트에서 활성화하거나 CLI 사용 |
+| Graft | private npm prefix의 `@nanonets/graft` | MCP 기본 활성화, 저장소의 구조 인덱스 자동 준비 |
 | Mem0 | 격리된 toolkit venv의 `mem0ai` + 로컬 MCP | Oracle AI Vector Search와 Tailscale `mac` 모델 서버를 사용 |
 | Headroom | 격리된 uv의 `headroom-ai[all]` | 전역 MCP + 기본값으로 상주 프록시 배포 |
 | Kubernetes MCP | `brew install kubernetes-mcp-server` | 전역 MCP, 기존 kubeconfig와 인증 플러그인 사용 |
@@ -154,7 +154,16 @@ MCP 전용 모드는 프록시를 제거하고 일반 ChatGPT 연결을 사용�
 Hook 설정은 `[features]`의 `hooks = true`를 사용합니다. 설치·resume·업데이트 시
 폐기된 `codex_hooks` 키를 제거합니다.
 
-Graft는 신규 설치에서 전역 `enabled = false`로 등록합니다.
+Graft는 전역 기본 활성화됩니다. `codex` 실행 또는 Codex IDE의 MCP 시작 시 현재 Git
+저장소에 구조 인덱스가 없으면 무료·로컬 빌드 후 도구를 제공합니다. 별도 hook 신뢰,
+활성화 명령, `graft build` 실행은 필요하지 않습니다. 기존 인덱스는 재사용하고 이후
+변경은 Graft의 조회 시 자동 갱신 기능이 처리합니다.
+
+첫 빌드와 잠금 대기는 기본 총 90초 이내로 제한하며, MCP 시작 제한보다 10초 짧게
+설정합니다. 동시에 시작한 세션은 저장소별 잠금으로 중복 빌드를 방지합니다.
+생성한 `graft/`는 Git의 로컬 `info/exclude`에 추가하며 `.gitignore`와 `.ignore`는
+변경하지 않습니다. 빌드 실패·시간 초과 시 원인은 MCP stderr에 남기고 도구 없는
+정상 연결로 대기합니다. 다음 세션에서 다시 시도합니다.
 
 설치·resume·업데이트는 private npm prefix에 Graft 파서의 설치 스크립트 허용 목록을
 기록하고 네이티브 모듈을 재빌드합니다. npm 12의 기본 스크립트 차단으로 컴파일이
@@ -166,21 +175,11 @@ Graft는 신규 설치에서 전역 `enabled = false`로 등록합니다.
 Tools), Node 헤더 다운로드에 필요한 네트워크/인증서 설정이 필요합니다.
 설치 후 Node나 패키지를 별도로 변경한 경우에는 업데이트를 다시 실행하세요.
 
-기존에 지정한 활성화 설정은 업데이트 시 보존합니다. 이전 설치에서 Git 저장소 밖의 시작 경고를 없애려면
-`~/.codex/config.toml`의 `[mcp_servers.graft]`에 `enabled = false`를 설정하세요.
-실제 Git 프로젝트의 신뢰된 `.codex/config.toml`에는 다음 설정을 추가할 수 있습니다.
-
-```toml
-[mcp_servers.graft]
-enabled = true
-```
-
-CLI에서 해당 Git 프로젝트에 한 번만 활성화하려면
-`codex -c mcp_servers.graft.enabled=true`를 실행합니다.
-
-Graft 0.18.0은 인덱스가 없는 저장소에서 `connected (0 tools)`로 표시되는 것이
-정상입니다. 도구를 사용하려면 해당 저장소에서 `graft build`로 구조 인덱스를
-생성한 뒤 Codex 세션을 다시 시작하세요. `graft init`이나 유료 `--deep` 빌드는 필요하지 않습니다.
+이 버전으로 최초 전환할 때는 이전 기본 비활성화 설정도 자동 활성화로 이전합니다.
+그 후 사용자가 명시한 `enabled = false`는 업데이트 시 보존합니다.
+Git 저장소 밖에서의 `connected (0 tools)`는 정상 대기 상태입니다. 저장소 안에서도
+0개라면 빌드 실패·시간 초과 로그를 확인하세요. 설치 완료 검사는 임시 저장소에서
+자동 인덱스 생성 후 도구가 실제 제공되는지까지 검사합니다.
 
 Kubernetes 설치 검증과 doctor는 `kubectl config view`로 로컬 kubeconfig의
 `current-context`를 확인합니다. 비어 있거나 유효하지 않으면 context 목록과 해결
@@ -193,7 +192,7 @@ Kubernetes 설치 검증과 doctor는 `kubectl config view`로 로컬 kubeconfig
   후 `activate_project` 등을 사용하도록 전역 지침에 명시합니다. 언어별 추가 런타임이나
   language server가 필요하면 해당 프로젝트에서 별도로 설치해야 할 수 있습니다.
 - Graft의 MCP 서버는 시작 디렉터리와 연결됩니다. Git 저장소 밖에서 시작하면 홈 전체를
-  인덱싱하지 않고 종료합니다. IDE가 MCP를 저장소 밖에서 시작했을 때는 Codex가 실제
+  인덱싱하지 않고 도구 없는 정상 MCP 연결로 대기합니다. IDE가 MCP를 저장소 밖에서 시작했을 때는 Codex가 실제
   프로젝트 디렉터리에서 Graft CLI를 사용하도록 지침에 명시합니다. 따라서 모든 IDE
   실행 방식에서 Graft가 반드시 MCP로 동작한다는 보장은 없습니다.
 - Graft의 기본 구조적 그래프는 별도 API 키 없이 만들 수 있습니다. LLM 기반 `--deep`

@@ -40,10 +40,10 @@ class Saved(Exception):
     pass
 
 
-def check_configure(existing):
+def check_configure(existing, state=None):
     doc = tomlkit.parse(existing)
     with patch.dict(c.os.environ, CT_PREFIX='/tools', CT_UV='/uv', CT_NPM='/npm', CT_NODE='/selected/node'), \
-            patch.object(c, 'read_state', return_value={}), \
+            patch.object(c, 'read_state', return_value=state or {}), \
             patch.object(c, 'save_state'), \
             patch.object(c, 'executable', return_value='/node'), \
             patch.object(c, 'npm_binary', return_value='/package'), \
@@ -66,12 +66,15 @@ def check_configure(existing):
 
 doc = check_configure('[features]\ncodex_hooks = true\nother = false\n')
 assert doc['features']['other'] is False
-assert doc['mcp_servers']['graft']['enabled'] is False
+assert doc['mcp_servers']['graft']['enabled'] is True
 doc = check_configure(tomlkit.dumps(doc))
-assert doc['mcp_servers']['graft']['enabled'] is False
+assert doc['mcp_servers']['graft']['enabled'] is True
 doc = check_configure('[mcp_servers.graft]\nenabled = true\ntool_timeout_sec = 42\n')
 assert doc['mcp_servers']['graft']['enabled'] is True
 assert doc['mcp_servers']['graft']['tool_timeout_sec'] == 42
+assert check_configure('[mcp_servers.graft]\nenabled = false\n')['mcp_servers']['graft']['enabled'] is True
+assert check_configure('[mcp_servers.graft]\nenabled = false\n',
+    {'graft_auto_start': True})['mcp_servers']['graft']['enabled'] is False
 assert doc['mcp_servers']['mem0']['enabled'] is True
 assert 'install_memory' not in Path(__file__).with_name('setup.sh').read_text()
 
@@ -149,12 +152,12 @@ for line in sys.stdin:
     if message.get('method') == 'initialize':
         result = {'protocolVersion': '2024-11-05', 'capabilities': {}, 'serverInfo': {'name': 'test', 'version': '1'}}
     elif message.get('method') == 'tools/list':
-        result = {'tools': [{'name': 'test', 'inputSchema': {'type': 'object'}}]}
+        result = {'tools': [] if mode == 'idle' else [{'name': 'test', 'inputSchema': {'type': 'object'}}]}
     else:
         continue
     print(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}), flush=True)
 ''')
-    for mode in ('ok', 'crash', 'timeout'):
+    for mode in ('ok', 'crash', 'timeout', 'idle'):
         entry = {'command': c.sys.executable, 'args': [str(server), mode],
                  'enabled': False, 'cwd': '/nonexistent', 'startup_timeout_sec': 0.5}
         with patch.object(c, 'config', return_value={'mcp_servers': {'graft': entry}}), \

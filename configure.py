@@ -137,12 +137,10 @@ def configure():
     state['npm'] = os.environ['CT_NPM']
     graft = npm_binary('@nanonets/graft', 'graft')
     c7 = npm_binary('@upstash/context7-mcp', 'context7-mcp')
-    graft_launch = launcher('graft-mcp', [state['node'], graft, 'mcp'],
-        'repo=$(git rev-parse --show-toplevel 2>/dev/null) || {\n'
-        '  echo "Graft MCP: client cwd is not a Git repository; use Graft CLI in the workspace." >&2\n'
-        '  exit 1\n}\ncd -- "$repo"\n')
+    graft_launch = launcher('graft-mcp',
+        [sys.executable, str(BUNDLE / 'graft_mcp.py'), state['node'], graft])
     state['graft_binary'] = graft
-    save_state(state)
+    migrate_graft = not state.get('graft_auto_start', False)
     doc = config()
     # Keep login independent from any old OS keychain entry.
     doc['cli_auth_credentials_store'] = 'file'
@@ -165,11 +163,15 @@ def configure():
         # Preserve later user-added limits, disabled_tools and approval settings.
         entry['command'] = command
         entry['args'] = args
-        entry.setdefault('enabled', name != 'graft')
+        entry.setdefault('enabled', True)
+        if name == 'graft' and migrate_graft:
+            entry['enabled'] = True
         entry.setdefault('startup_timeout_sec', 120)
         entry.setdefault('tool_timeout_sec', 180)
         env = table(entry, 'env')
         env['PATH'] = state['path']
+        if name == 'graft':
+            env['CODEX_GRAFT_BUILD_TIMEOUT'] = str(min(90, max(.1, float(entry['startup_timeout_sec']) - 10)))
         if name == 'kubernetes':
             # Persist only explicitly configured kubeconfig file paths, never its contents.
             if os.environ.get('KUBECONFIG'):
@@ -179,6 +181,8 @@ def configure():
         if name == 'context7' and os.environ.get('CONTEXT7_API_KEY'):
             env['CONTEXT7_API_KEY'] = os.environ['CONTEXT7_API_KEY']
     save_config(doc)
+    state['graft_auto_start'] = True
+    save_state(state)
     instructions = CODEX / 'AGENTS.md'
     text = instructions.read_text() if instructions.exists() else ''
     text = replace_block(text, 'CODEX-TOOLKIT', (BUNDLE / 'policy.md').read_text())
@@ -412,7 +416,9 @@ def mcp_probe(name, entry, workdir, stderr=subprocess.DEVNULL):
         send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         send({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list', 'params': {}})
         result = wait_response(2)
-        print(f'PASS {name}: MCP handshake and {len(result.get("tools", []))} tool definitions')
+        count = len(result.get('tools', []))
+        print(f'PASS {name}: MCP handshake and {count} tool definitions')
+        return count
     finally:
         import signal
         try:
@@ -434,7 +440,8 @@ def verify_graft():
             tempfile.TemporaryFile(mode='w+t') as log:
         subprocess.run(['git', 'init', '--quiet', workdir], check=True)
         try:
-            mcp_probe('graft', entry, workdir, stderr=log)
+            if not mcp_probe('graft', entry, workdir, stderr=log):
+                raise RuntimeError('Graft advertised no tools after automatic index preparation')
         except Exception as exc:
             log.seek(0)
             details = log.read()[-8000:].strip()
@@ -452,10 +459,6 @@ def doctor():
             continue
         if name == 'kubernetes' and not kubernetes_preflight(entry):
             failures += 1
-            continue
-        if name == 'graft' and subprocess.run(['git', 'rev-parse', '--show-toplevel'],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
-            print('SKIP graft: run codex-doctor inside a Git repository to test workspace binding.')
             continue
         print(f'Checking {name}...', flush=True)
         try:
