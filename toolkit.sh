@@ -170,7 +170,7 @@ install_packages() {
     CT_NPM_PY=/usr/bin/python3
   fi
   "$CT_NPM" uninstall --prefix "$CT_ROOT/npm" claude-mem >/dev/null 2>&1 || true
-  npm_config_python="$CT_NPM_PY" "$CT_NPM" install --prefix "$CT_ROOT/npm" --save-exact \
+  PYTHON="$CT_NPM_PY" "$CT_NPM" install --prefix "$CT_ROOT/npm" --save-exact \
     @nanonets/graft@latest @upstash/context7-mcp@latest
   ct_repo="$CT_ROOT/repos/ponytail"
   if [ -d "$ct_repo/.git" ]; then
