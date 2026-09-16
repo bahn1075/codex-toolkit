@@ -2,6 +2,7 @@
 import contextlib
 import io
 import json
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -9,6 +10,30 @@ from unittest.mock import patch
 
 import tomlkit
 import configure as c
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    source = Path(__file__).resolve().parent
+    (root / 'setup.sh').write_text((source / 'setup.sh').read_text())
+    (root / 'toolkit.sh').write_text(
+        'source ' + shlex.quote(str(source / 'toolkit.sh')) + '\n'
+        'CT_HOME="$SCRIPT_DIR/home"\nCT_ROOT="$CT_HOME/toolkit"\n'
+        'preflight() { :; }\nacquire_lock() { :; }\n'
+        'reset_codex() { exit 99; }\nbootstrap() { echo RESUMED; }\n'
+        + ''.join(name + '() { :; }\n' for name in (
+            'install_packages', 'configure_core', 'install_mem0',
+            'configure_headroom', 'install_plugins', 'finish')))
+    home = root / 'home'
+    home.mkdir()
+    marker = home / 'previous-home.txt'
+    for has_marker in (False, True):
+        if has_marker:
+            marker.write_text('/previous-backup\n')
+        result = subprocess.run(['bash', str(root / 'setup.sh'), '--resume'], capture_output=True, text=True)
+        assert (result.returncode == 0) == has_marker
+        assert ('RESUMED' in result.stdout) == has_marker
+        assert not (home / 'toolkit/venv').exists()
 
 
 class Saved(Exception):

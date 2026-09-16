@@ -15,8 +15,8 @@ if [ "$RESET" = 1 ]; then
   reset_codex
 else
   if [ ! -f "$CT_ROOT/install-state.json" ]; then
-    # Bootstrap can fail before state-init (e.g. when downloading tomlkit).
-    [ -f "$CT_HOME/previous-home.txt" ] && [ -d "$CT_ROOT/venv" ] \
+    # Bootstrap can fail before even creating the venv (e.g. Portable Ruby download).
+    [ -f "$CT_HOME/previous-home.txt" ] \
       || die 'No previous toolkit setup to resume.'
   fi
 fi

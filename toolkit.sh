@@ -8,8 +8,9 @@ CT_LOCK_HELD=0
 CT_STAGE=preflight
 CT_PY=''
 CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-}
-# Honor trusted OS roots, including enterprise roots installed in the keychain.
+# Honor trusted OS roots, including enterprise roots, on old and new uv versions.
 export UV_SYSTEM_CERTS=${UV_SYSTEM_CERTS:-true}
+export UV_NATIVE_TLS=${UV_NATIVE_TLS:-$UV_SYSTEM_CERTS}
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '\n%s\n' "$*"; }
