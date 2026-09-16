@@ -28,7 +28,8 @@ codex
 ```
 
 Codex에서 `/mcp`를 열어 `mem0`이 연결되었는지 확인하고 새 대화를 시작합니다.
-Mem0는 hook 신뢰 절차 없이 MCP 도구로 저장·검색·목록·삭제를 제공합니다.
+Mem0 MCP 도구는 바로 사용할 수 있습니다. 세션 종료 시 자동 저장도 사용하려면
+`/hooks`에서 설치된 Mem0 `SessionStart`·`SessionEnd` hook을 검토하고 신뢰하세요.
 
 이후에는 평소처럼 프로젝트에서 `codex`를 실행하거나 VS Code의 **Codex 확장**을
 열면 됩니다. `use context7`, Serena 활성화 요청, 별도의 프록시 시작 명령을 매번
@@ -87,6 +88,37 @@ collection을 사용합니다. 추론은
 `text-embedding-bge-m3`(1024차원)로 고정합니다. 서버와 Oracle 연결이 모두 가능해야
 저장·검색 도구가 동작합니다. Codex에서는 `/mcp`의 `mem0` 도구로 메모리를 저장·검색·목록·삭제합니다.
 [Mem0 공식 저장소](https://github.com/mem0ai/mem0)
+
+설치·업데이트는 `~/.codex/hooks.json`에 Mem0 hook을 병합하며 다른 hook을 보존합니다.
+`SessionEnd`는 종료 시점의 대화 기록 범위를 큐에 기록하고 별도 프로세스를 시작합니다.
+Codex 종료 hook은 최대 3초이므로 실제 모델 추론·Oracle 저장은 종료 이후에도 계속됩니다.
+`SessionStart`는 이전에 실패하거나 중단된 큐만 재시도합니다.
+
+- 신규 세션: 사용자 메시지와 최종 응답에서 장기적으로 유용한 사실을 추출해 저장합니다.
+- resume: 동일 세션 ID의 마지막 성공 지점 이후만 처리합니다. 새 대화가 없으면 저장하지 않습니다.
+- 저장 실패: 완료 지점을 갱신하지 않고 다음 시작·종료 또는 수동 실행에서 재시도합니다.
+- 저장 직후 중단: Oracle에 기록한 사실 식별자를 확인해 재삽입을 방지합니다.
+
+기록은 기본 `codex` 메모리 영역에 들어갑니다. 도구 출력·내부 추론·시스템 지침은
+제외하며, 알려진 토큰·비밀번호 패턴은 마스킹합니다. 자유 형식의 모든 비밀값을
+완벽하게 식별하는 필터는 아니므로 민감한 세션은 `/hooks`에서 자동 저장 hook을 끄세요.
+Mem0의 LM Studio provider와 JSON schema를 사용하며, 추출 JSON이 잘못되면 성공으로
+처리하지 않습니다.
+
+큐·추출 대기 데이터·완료 지점은 `~/.codex/toolkit/mem0-sessions/`에 저장됩니다
+(디렉터리 700, 데이터 파일 600). `worker.log`에서 성공·실패를 확인할 수 있습니다.
+실패 원인을 수정한 뒤 수동 재시도할 수도 있습니다:
+
+```bash
+~/.codex/toolkit/bin/mem0-session --drain
+```
+
+완료 지점은 이 hook으로 처리한 대화부터 추적합니다. 처음 도입할 때 기존 세션의
+수동 MCP 저장 여부는 역산할 수 없으므로, 완료 지점이 없는 세션은 전체 기록을 한 번
+처리합니다. 정상적인 `SessionEnd`가 발생하지 않는 강제 종료에서는 새 작업이 등록되지
+않으며, 해당 세션을 resume한 뒤 정상 종료하면 아직 처리하지 않은 부분을 처리합니다.
+Codex JSONL transcript 형식은 안정된 공개 API가 아니므로 버전 변경 시 확인이 필요합니다.
+[Codex 공식 hook 문서](https://developers.openai.com/codex/hooks)
 
 ## Headroom: 매번 시작하지 않는 구성
 

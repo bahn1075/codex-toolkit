@@ -222,6 +222,23 @@ def mem0_settings():
     }, indent=2) + '\n')
 
 
+def configure_mem0_hooks():
+    command = shlex.quote(launcher('mem0-session', [sys.executable, str(BUNDLE / 'mem0_session.py')]))
+    path = CODEX / 'hooks.json'
+    doc = json.loads(path.read_text()) if path.exists() else {}
+    hooks = doc.setdefault('hooks', {})
+    for event in ('SessionStart', 'SessionEnd'):
+        groups = hooks.setdefault(event, [])
+        for group in groups:
+            group['hooks'] = [h for h in group['hooks'] if h.get('command') != command]
+        groups[:] = [group for group in groups if group['hooks']]
+        group = {'hooks': [{'type': 'command', 'command': command, 'timeout': 3}]}
+        if event == 'SessionStart':
+            group['matcher'] = 'startup|resume'
+        groups.append(group)
+    write(path, json.dumps(doc, indent=2) + '\n')
+
+
 def remove_claude_mem():
     """Remove only claude-mem entries managed by this toolkit; retain its data for recovery."""
     doc = config()
@@ -437,6 +454,7 @@ def main():
         state = read_state(); state[args[0]] = args[1]; save_state(state)
     elif cmd == 'configure': configure()
     elif cmd == 'mem0-settings': mem0_settings()
+    elif cmd == 'mem0-hooks': configure_mem0_hooks()
     elif cmd == 'remove-claude-mem': remove_claude_mem()
     elif cmd == 'verify-proxy': verify_proxy()
     elif cmd == 'direct-provider': direct_provider()

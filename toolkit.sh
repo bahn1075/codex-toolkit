@@ -98,7 +98,7 @@ bootstrap() {
   mkdir -p "$CT_ROOT/bin" "$CT_ROOT/repos" "$CT_ROOT/npm" "$CT_ROOT/logs" "$CT_ROOT/bundle"
   # Keep the installer/update bundle available after the downloaded copy is removed.
   if [ "$SCRIPT_DIR" != "$CT_ROOT/bundle" ]; then
-    for ct_file in setup.sh update.sh toolkit.sh configure.py mem0_mcp.py policy.md README.ko.md check_configure.py; do
+    for ct_file in setup.sh update.sh toolkit.sh configure.py mem0_mcp.py mem0_session.py policy.md README.md check_configure.py check_mem0_session.py; do
       cp "$SCRIPT_DIR/$ct_file" "$CT_ROOT/bundle/$ct_file"
     done
   fi
@@ -186,6 +186,7 @@ install_mem0() {
   CT_STAGE=mem0
   note 'Configuring Mem0 with Oracle AI Vector Search and the Tailscale mac model server.'
   "$CT_PY" "$SCRIPT_DIR/configure.py" mem0-settings
+  "$CT_PY" "$SCRIPT_DIR/configure.py" mem0-hooks
   "$CT_PY" "$SCRIPT_DIR/configure.py" status mem0_install configured
 }
 configure_headroom() {
@@ -236,6 +237,7 @@ finish() {
   printf '%s\n' \
     'Open a new terminal (or restart VS Code), then run: codex login' \
     'Run codex and start a new thread; Mem0 is available through /mcp.' \
+    'Review and trust the Mem0 SessionStart/SessionEnd hooks in /hooks to enable automatic session memory.' \
     'MCP visibility: /mcp. Connection test: ~/.codex/toolkit/bin/codex-doctor' \
     'Update later: bash ~/.codex/toolkit/bundle/update.sh'
   if [ "$CT_FAILURES" -gt 0 ]; then
