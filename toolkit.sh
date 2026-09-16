@@ -120,13 +120,13 @@ bootstrap() {
   CT_PY="$CT_ROOT/venv/bin/python"
   export UV_TOOL_DIR="$CT_ROOT/uv-tools"
   export UV_TOOL_BIN_DIR="$CT_ROOT/bin"
-  export PATH="$CT_ROOT/bin:$CT_ROOT/npm/node_modules/.bin:$(dirname "$CT_NODE"):$CT_PREFIX/bin:$PATH"
+  export PATH="$(dirname "$CT_NODE"):$CT_ROOT/bin:$CT_ROOT/npm/node_modules/.bin:$CT_PREFIX/bin:$PATH"
   if [ -f "$CT_ROOT/install-state.json" ]; then
     [ -n "$CT_HEADROOM_MODE" ] || CT_HEADROOM_MODE=$("$CT_PY" "$SCRIPT_DIR/configure.py" state-get headroom_mode)
   fi
   CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-proxy}
   case "$CT_HEADROOM_MODE" in proxy|mcp) ;; *) die 'CT_HEADROOM_MODE must be proxy or mcp.' ;; esac
-  export CT_HEADROOM_MODE CT_PREFIX CT_UV CT_NPM
+  export CT_HEADROOM_MODE CT_PREFIX CT_UV CT_NPM CT_NODE
   "$CT_PY" "$SCRIPT_DIR/configure.py" state-init
 }
 snapshot_configuration() {
@@ -170,8 +170,11 @@ install_packages() {
     CT_NPM_PY=/usr/bin/python3
   fi
   "$CT_NPM" uninstall --prefix "$CT_ROOT/npm" claude-mem >/dev/null 2>&1 || true
-  PYTHON="$CT_NPM_PY" "$CT_NPM" install --prefix "$CT_ROOT/npm" --save-exact \
+  "$CT_PY" "$SCRIPT_DIR/configure.py" npm-policy
+  PYTHON="$CT_NPM_PY" "$CT_NPM" install --prefix "$CT_ROOT/npm" --save-exact --ignore-scripts=false --foreground-scripts \
     @nanonets/graft@latest @upstash/context7-mcp@latest
+  # Also repair unchanged packages skipped by an earlier npm install or built with another Node.
+  PYTHON="$CT_NPM_PY" "$CT_NPM" rebuild --prefix "$CT_ROOT/npm" --ignore-scripts=false --foreground-scripts
   ct_repo="$CT_ROOT/repos/ponytail"
   if [ -d "$ct_repo/.git" ]; then
     [ -z "$(git -C "$ct_repo" status --porcelain)" ] || die 'Ponytail checkout has local changes; update stopped to preserve them.'
@@ -249,6 +252,7 @@ install_plugins() {
 finish() {
   CT_STAGE=verification
   "$CT_PY" "$SCRIPT_DIR/configure.py" validate
+  "$CT_PY" "$SCRIPT_DIR/configure.py" verify-graft
   note 'Install/configuration pass finished. Authentication and runtime checks are separate.'
   printf '%s\n' \
     'Open a new terminal (or restart VS Code), then run: codex login' \

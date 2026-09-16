@@ -154,8 +154,19 @@ MCP 전용 모드는 프록시를 제거하고 일반 ChatGPT 연결을 사용�
 Hook 설정은 `[features]`의 `hooks = true`를 사용합니다. 설치·resume·업데이트 시
 폐기된 `codex_hooks` 키를 제거합니다.
 
-Graft는 신규 설치에서 전역 `enabled = false`로 등록합니다. 기존에 지정한 활성화
-설정은 업데이트 시 보존합니다. 이전 설치에서 Git 저장소 밖의 시작 경고를 없애려면
+Graft는 신규 설치에서 전역 `enabled = false`로 등록합니다.
+
+설치·resume·업데이트는 private npm prefix에 Graft 파서의 설치 스크립트 허용 목록을
+기록하고 네이티브 모듈을 재빌드합니다. npm 12의 기본 스크립트 차단으로 컴파일이
+누락되는 경우를 방지하며, 설치에 선택한 Node를 MCP 실행에도 사용합니다.
+완료 전에는 활성화 여부와 관계없이 임시 Git 저장소에서 Graft MCP 초기화와 도구
+목록 조회를 검사합니다. 빌드 또는 MCP 검사가 실패하면 설치는 실패로 종료되며,
+출력된 원인을 해결한 뒤 `bash setup.sh --resume`으로 재개할 수 있습니다.
+소스 빌드가 필요한 환경에는 C/C++ 컴파일러와 make(macOS는 Xcode Command Line
+Tools), Node 헤더 다운로드에 필요한 네트워크/인증서 설정이 필요합니다.
+설치 후 Node나 패키지를 별도로 변경한 경우에는 업데이트를 다시 실행하세요.
+
+기존에 지정한 활성화 설정은 업데이트 시 보존합니다. 이전 설치에서 Git 저장소 밖의 시작 경고를 없애려면
 `~/.codex/config.toml`의 `[mcp_servers.graft]`에 `enabled = false`를 설정하세요.
 실제 Git 프로젝트의 신뢰된 `.codex/config.toml`에는 다음 설정을 추가할 수 있습니다.
 
@@ -166,6 +177,10 @@ enabled = true
 
 CLI에서 해당 Git 프로젝트에 한 번만 활성화하려면
 `codex -c mcp_servers.graft.enabled=true`를 실행합니다.
+
+Graft 0.18.0은 인덱스가 없는 저장소에서 `connected (0 tools)`로 표시되는 것이
+정상입니다. 도구를 사용하려면 해당 저장소에서 `graft build`로 구조 인덱스를
+생성한 뒤 Codex 세션을 다시 시작하세요. `graft init`이나 유료 `--deep` 빌드는 필요하지 않습니다.
 
 Kubernetes 설치 검증과 doctor는 `kubectl config view`로 로컬 kubeconfig의
 `current-context`를 확인합니다. 비어 있거나 유효하지 않으면 context 목록과 해결

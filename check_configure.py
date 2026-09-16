@@ -42,7 +42,7 @@ class Saved(Exception):
 
 def check_configure(existing):
     doc = tomlkit.parse(existing)
-    with patch.dict(c.os.environ, CT_PREFIX='/tools', CT_UV='/uv', CT_NPM='/npm'), \
+    with patch.dict(c.os.environ, CT_PREFIX='/tools', CT_UV='/uv', CT_NPM='/npm', CT_NODE='/selected/node'), \
             patch.object(c, 'read_state', return_value={}), \
             patch.object(c, 'save_state'), \
             patch.object(c, 'executable', return_value='/node'), \
@@ -55,6 +55,8 @@ def check_configure(existing):
         except Saved:
             pass
     restored = tomlkit.parse(tomlkit.dumps(doc))
+    assert restored['mcp_servers']['context7']['command'] == '/selected/node'
+    assert restored['mcp_servers']['graft']['env']['PATH'].split(c.os.pathsep)[0] == '/selected'
     assert restored['features']['hooks'] is True
     assert 'codex_hooks' not in restored['features']
     assert '--enable-web-dashboard=false' in restored['mcp_servers']['serena']['args']
@@ -118,4 +120,68 @@ printf 'CONTINUED'
     assert result.stdout.endswith('CONTINUED')
     assert ('Superpowers installation failed' in result.stderr) == bool(plugin_exit)
 
-print('PASS: hooks migration, Graft defaults/preservation, Kubernetes local preflight, Superpowers install handling.')
+with tempfile.TemporaryDirectory() as tmp, patch.object(c, 'ROOT', Path(tmp)):
+    c.npm_policy()
+    manifest = Path(tmp) / 'npm/package.json'
+    data = json.loads(manifest.read_text())
+    assert data['allowScripts']['tree-sitter-kotlin'] is True
+    assert data['allowScripts']['@davisvaughan/tree-sitter-r'] is True
+    assert '*' not in data['allowScripts']
+    data.update(dependencies={'example': '1.0.0'})
+    data['allowScripts']['tree-sitter-kotlin'] = False
+    manifest.write_text(json.dumps(data))
+    c.npm_policy()
+    assert json.loads(manifest.read_text()) == data
+
+# Exercise the real stdio probe, including stderr and process cleanup, in a fresh Git repo.
+with tempfile.TemporaryDirectory() as tmp:
+    server = Path(tmp) / 'server.py'
+    server.write_text('''import json, os, subprocess, sys, time
+assert subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip() == os.getcwd()
+mode = sys.argv[1]
+if mode == 'crash':
+    print('No native build was found: tree-sitter-kotlin', file=sys.stderr)
+    sys.exit(1)
+if mode == 'timeout':
+    time.sleep(30)
+for line in sys.stdin:
+    message = json.loads(line)
+    if message.get('method') == 'initialize':
+        result = {'protocolVersion': '2024-11-05', 'capabilities': {}, 'serverInfo': {'name': 'test', 'version': '1'}}
+    elif message.get('method') == 'tools/list':
+        result = {'tools': [{'name': 'test', 'inputSchema': {'type': 'object'}}]}
+    else:
+        continue
+    print(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}), flush=True)
+''')
+    for mode in ('ok', 'crash', 'timeout'):
+        entry = {'command': c.sys.executable, 'args': [str(server), mode],
+                 'enabled': False, 'cwd': '/nonexistent', 'startup_timeout_sec': 0.5}
+        with patch.object(c, 'config', return_value={'mcp_servers': {'graft': entry}}), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            try:
+                c.verify_graft()
+            except RuntimeError as exc:
+                assert mode != 'ok'
+                assert 'Graft MCP verification failed' in str(exc)
+                if mode == 'crash':
+                    assert 'No native build was found: tree-sitter-kotlin' in str(exc)
+            else:
+                assert mode == 'ok'
+                assert 'MCP handshake and 1 tool definitions' in output.getvalue()
+
+# Both entrypoints share finish(): a failed Graft probe must prevent the success message.
+for failed in ('', 'verify-graft'):
+    result = subprocess.run(['bash', '-c', '''
+set -Eeuo pipefail
+source "$1/toolkit.sh"
+CT_PY=mock_python
+SCRIPT_DIR=$1
+failed=$2
+mock_python() { [ "$2" != "$failed" ]; }
+finish
+''', 'check', str(Path(__file__).resolve().parent), failed], capture_output=True, text=True)
+    assert (result.returncode == 0) == (not failed)
+    assert ('Install/configuration pass finished' in result.stdout) == (not failed)
+
+print('PASS: configuration, Graft build policy/runtime probe/failure gate, Kubernetes preflight, Superpowers handling.')

@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import urllib.request
 from getpass import getpass
@@ -67,7 +68,8 @@ def executable(name):
 
 
 def safe_path():
-    paths = [str(ROOT / 'bin'), str(ROOT / 'npm/node_modules/.bin')]
+    paths = [os.path.dirname(os.environ.get('CT_NODE', '')),
+             str(ROOT / 'bin'), str(ROOT / 'npm/node_modules/.bin')]
     paths.extend(os.environ['PATH'].split(os.pathsep))
     return os.pathsep.join(dict.fromkeys(p for p in paths if p.startswith('/')))
 
@@ -88,6 +90,22 @@ def npm_binary(package, expected=None):
     if not target.is_file() or not target.is_relative_to(p.parent.resolve()):
         raise RuntimeError(f'Invalid npm binary path for {package}')
     return str(target)
+
+
+def npm_policy():
+    """Allow the known native parser builds in the private prefix, including npm 12."""
+    path = ROOT / 'npm/package.json'
+    data = json.loads(path.read_text()) if path.exists() else {}
+    policy = data.setdefault('allowScripts', {})
+    for name in (
+        'tree-sitter', 'tree-sitter-cli', 'tree-sitter-go', 'tree-sitter-java',
+        'tree-sitter-javascript', 'tree-sitter-kotlin', 'tree-sitter-php',
+        'tree-sitter-python', '@davisvaughan/tree-sitter-r',
+        'tree-sitter-swift', 'tree-sitter-typescript',
+    ):
+        # npm matches an alias by its real registry name. Preserve explicit denials.
+        policy.setdefault(name, True)
+    write(path, json.dumps(data, indent=2) + '\n')
 
 
 def replace_block(text, tag, body):
@@ -114,7 +132,7 @@ def configure():
     state = read_state()
     state['path'] = safe_path()
     state['codex'] = os.environ['CT_PREFIX'] + '/bin/codex'
-    state['node'] = executable('node')
+    state['node'] = os.environ.get('CT_NODE') or executable('node')
     state['uv'] = os.environ['CT_UV']
     state['npm'] = os.environ['CT_NPM']
     graft = npm_binary('@nanonets/graft', 'graft')
@@ -347,14 +365,14 @@ def validate():
     print('NOT CHECKED here: Codex login, actual inference, Mem0 writes/searches and IDE behavior.')
 
 
-def mcp_probe(name, entry, workdir):
+def mcp_probe(name, entry, workdir, stderr=subprocess.DEVNULL):
     """Initialize + tools/list only: never invoke cluster or memory write tools."""
     q = queue.Queue()
     env = os.environ.copy()
     env.update(entry.get('env', {}))
     proc = subprocess.Popen([entry['command'], *entry.get('args', [])],
         cwd=entry.get('cwd') or workdir, env=env, stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+        stdout=subprocess.PIPE, stderr=stderr, text=True, start_new_session=True)
     def reader():
         for line in proc.stdout:
             try:
@@ -369,7 +387,10 @@ def mcp_probe(name, entry, workdir):
     def wait_response(request_id, seconds=120):
         end = time.monotonic() + seconds
         while time.monotonic() < end:
-            msg = q.get(timeout=max(.01, end - time.monotonic()))
+            try:
+                msg = q.get(timeout=max(.01, end - time.monotonic()))
+            except queue.Empty:
+                raise TimeoutError('MCP response timeout') from None
             if msg.get('eof') or msg.get('protocol_error'):
                 raise RuntimeError('invalid stdio stream or early exit')
             if msg.get('method') and 'id' in msg:
@@ -387,7 +408,7 @@ def mcp_probe(name, entry, workdir):
         send({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
             'protocolVersion': '2024-11-05', 'capabilities': {'roots': {'listChanged': False}},
             'clientInfo': {'name': 'codex-toolkit-doctor', 'version': '1.0'}}})
-        wait_response(1)
+        wait_response(1, float(entry.get('startup_timeout_sec', 120)))
         send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         send({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list', 'params': {}})
         result = wait_response(2)
@@ -402,6 +423,25 @@ def mcp_probe(name, entry, workdir):
             proc.wait()
         except ProcessLookupError:
             pass
+
+
+def verify_graft():
+    """Probe even when disabled, without requiring the installer to be a Git checkout."""
+    entry = dict(config()['mcp_servers']['graft'])
+    # Check the installed runtime in isolation; doctor checks the user's actual workspace.
+    entry.pop('cwd', None)
+    with tempfile.TemporaryDirectory(prefix='codex-graft-') as workdir, \
+            tempfile.TemporaryFile(mode='w+t') as log:
+        subprocess.run(['git', 'init', '--quiet', workdir], check=True)
+        try:
+            mcp_probe('graft', entry, workdir, stderr=log)
+        except Exception as exc:
+            log.seek(0)
+            details = log.read()[-8000:].strip()
+            raise RuntimeError(
+                f'Graft MCP verification failed: {type(exc).__name__}: {exc}\n{details}\n'
+                'Check the native build output and Node/npm toolchain, then rerun setup.sh --resume.'
+            ) from exc
 
 
 def doctor():
@@ -452,6 +492,8 @@ def main():
         save_state(state)
     elif cmd == 'status':
         state = read_state(); state[args[0]] = args[1]; save_state(state)
+    elif cmd == 'npm-policy': npm_policy()
+    elif cmd == 'verify-graft': verify_graft()
     elif cmd == 'configure': configure()
     elif cmd == 'mem0-settings': mem0_settings()
     elif cmd == 'mem0-hooks': configure_mem0_hooks()
