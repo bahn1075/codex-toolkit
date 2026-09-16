@@ -11,6 +11,12 @@ CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-}
 # Honor trusted OS roots, including enterprise roots, on old and new uv versions.
 export UV_SYSTEM_CERTS=${UV_SYSTEM_CERTS:-true}
 export UV_NATIVE_TLS=${UV_NATIVE_TLS:-$UV_SYSTEM_CERTS}
+# npm lifecycle scripts can download through Node directly, outside npm's CA settings.
+if [ "$(uname -s)" = Linux ] && [ -z "${NODE_EXTRA_CA_CERTS:-}" ]; then
+  for ct_ca in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do
+    if [ -f "$ct_ca" ]; then export NODE_EXTRA_CA_CERTS="$ct_ca"; break; fi
+  done
+fi
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '\n%s\n' "$*"; }
@@ -41,11 +47,15 @@ preflight() {
   for ct_cmd in brew npm node uv git python3 bun; do
     command -v "$ct_cmd" >/dev/null || die "Required command missing: $ct_cmd"
   done
-  node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)' || die 'Node.js 22+ is required by this bundle.'
   CT_BREW=$(command -v brew)
   CT_UV=$(command -v uv)
   CT_NPM=$(command -v npm)
   CT_NODE=$(command -v node)
+  # Distro npm/node-gyp uses distro headers: do not pair it with an NVM Node binary.
+  if [ "$(uname -s)" = Linux ] && [ "$CT_NPM" -ef /usr/bin/npm ]; then
+    CT_NODE=/usr/bin/node
+  fi
+  "$CT_NODE" -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)' || die 'Node.js 22+ is required alongside the selected npm.'
   CT_PREFIX=$("$CT_BREW" --prefix)
   export PATH="$(dirname "$CT_NODE"):$CT_PREFIX/bin:$CT_PREFIX/sbin:$PATH"
   # Do not initialize/reset an actively running Codex process.
@@ -154,8 +164,13 @@ install_packages() {
     'mem0ai @ git+https://github.com/mem0ai/mem0.git@c7ee362aff94a369af70f13f2b4f853f6793ff4c' \
     'mcp>=1,<2' 'oracledb>=2.2,<3'
   # Official npm packages, private prefix: no npx download during each Codex launch.
+  # Distro node-gyp imports gyp from system Python; Azure CLI/Homebrew Python cannot see it.
+  CT_NPM_PY="$CT_BOOT_PY"
+  if [ "$(uname -s)" = Linux ] && [ "$CT_NPM" -ef /usr/bin/npm ]; then
+    CT_NPM_PY=/usr/bin/python3
+  fi
   "$CT_NPM" uninstall --prefix "$CT_ROOT/npm" claude-mem >/dev/null 2>&1 || true
-  "$CT_NPM" install --prefix "$CT_ROOT/npm" --save-exact \
+  npm_config_python="$CT_NPM_PY" "$CT_NPM" install --prefix "$CT_ROOT/npm" --save-exact \
     @nanonets/graft@latest @upstash/context7-mcp@latest
   ct_repo="$CT_ROOT/repos/ponytail"
   if [ -d "$ct_repo/.git" ]; then
