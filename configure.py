@@ -217,6 +217,8 @@ def configure():
             write(rc.resolve() if rc.is_symlink() else rc, updated,
                   (rc.stat().st_mode & 0o777) if rc.exists() else 0o600)
     launcher('codex-doctor', [sys.executable, str(ROOT / 'bundle/configure.py'), 'doctor'])
+    launcher('mem0-import', [sys.executable, str(BUNDLE / 'mem0_import/import_memories.py')])
+    launcher('mem0-import-prompt', ['bash', str(BUNDLE / 'mem0_import/import_memories.sh')])
 
 
 def mem0_settings():

@@ -124,6 +124,29 @@ Mem0의 LM Studio provider와 JSON schema를 사용하며, 추출 JSON이 잘못
 Codex JSONL transcript 형식은 안정된 공개 API가 아니므로 버전 변경 시 확인이 필요합니다.
 [Codex 공식 hook 문서](https://developers.openai.com/codex/hooks)
 
+### 기존 대화 내역 수동 가져오기
+
+Mem0 도입 전의 Claude·Codex 기록처럼 보편적인 문서 트리를 한 번에 가져오려면
+설치 후 다음 명령을 사용합니다. 하위 디렉터리를 재귀적으로 검색하며 `md`, `markdown`,
+`html`, `htm`, `json`, `jsonl`, `txt`, `text`, `csv`, `tsv`, `log`, `xml`, `yaml`, `yml`을
+지원합니다. HTML의 script/style 내용은 제외하고 JSON은 읽기 좋은 텍스트로 변환합니다.
+
+```bash
+~/.codex/toolkit/bin/mem0-import-prompt
+~/.codex/toolkit/bin/mem0-import --dry-run /Users/cozy/app/obsidian/AI
+~/.codex/toolkit/bin/mem0-import /Users/cozy/app/obsidian/AI
+```
+
+첫 번째 명령은 대상 디렉토리를 프롬프트로 입력받습니다. 시작 시 작업 대상 파일 수를
+보여주고, 처리 중에는 `[####################----------] 66.67% (2/3)` 형식으로 진행률을
+갱신합니다. `mem0-import`는 기존처럼 경로를 직접 지정하는 비대화형 실행용입니다.
+
+문서 안의 지시문은 신뢰할 수 없는 대화 데이터로 취급되며, 기존 Mem0 추출 규칙에 따라
+비밀번호·토큰·키 등은 마스킹하고 장기적으로 유용한 사실만 `codex` 영역에 저장합니다.
+같은 파일을 다시 실행해도 결정적 식별자로 이미 저장된 사실은 건너뜁니다. 모델·Oracle
+오류가 있는 파일은 경고를 남기고 나머지를 계속 처리하며, 마지막 JSON의 `errors`가 0이
+아니면 종료 코드는 1입니다. 다른 Mem0 영역은 `--user-id 이름`으로 지정할 수 있습니다.
+
 ## Headroom: 매번 시작하지 않는 구성
 
 기본 `CT_HEADROOM_MODE=proxy`는 공식 `headroom deploy --no-docker`에 Codex만 대상으로

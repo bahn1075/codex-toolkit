@@ -112,6 +112,10 @@ bootstrap() {
     for ct_file in setup.sh update.sh toolkit.sh configure.py graft_mcp.py mem0_mcp.py mem0_session.py policy.md README.md check_configure.py check_graft.py check_mem0_session.py; do
       cp "$SCRIPT_DIR/$ct_file" "$CT_ROOT/bundle/$ct_file"
     done
+    mkdir -p "$CT_ROOT/bundle/mem0_import"
+    cp "$SCRIPT_DIR/mem0_import/import_memories.py" "$CT_ROOT/bundle/mem0_import/import_memories.py"
+    cp "$SCRIPT_DIR/mem0_import/check_import_memories.py" "$CT_ROOT/bundle/mem0_import/check_import_memories.py"
+    cp "$SCRIPT_DIR/mem0_import/import_memories.sh" "$CT_ROOT/bundle/mem0_import/import_memories.sh"
   fi
   if [ ! -x "$CT_ROOT/venv/bin/python" ]; then
     "$CT_UV" venv --python "$CT_BOOT_PY" "$CT_ROOT/venv"
