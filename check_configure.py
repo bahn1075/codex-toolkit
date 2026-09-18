@@ -76,6 +76,12 @@ assert check_configure('[mcp_servers.graft]\nenabled = false\n')['mcp_servers'][
 assert check_configure('[mcp_servers.graft]\nenabled = false\n',
     {'graft_auto_start': True})['mcp_servers']['graft']['enabled'] is False
 assert doc['mcp_servers']['mem0']['enabled'] is True
+assert doc['tui']['status_line'] == [
+    'model-with-reasoning', 'current-dir', 'thread-name', 'run-state',
+    'five-hour-limit', 'weekly-limit', 'used-tokens',
+    'estimated-thread-cost', 'task-progress',
+]
+assert doc['tui']['status_line_use_colors'] is True
 assert 'install_memory' not in Path(__file__).with_name('setup.sh').read_text()
 
 with tempfile.TemporaryDirectory() as tmp:

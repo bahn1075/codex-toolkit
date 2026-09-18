@@ -147,6 +147,11 @@ def configure():
     features = table(doc, 'features')
     features.pop('codex_hooks', None)
     features['hooks'] = True
+    tui = table(doc, 'tui')
+    tui['status_line'] = ['model-with-reasoning', 'current-dir', 'thread-name', 'run-state',
+                          'five-hour-limit', 'weekly-limit', 'used-tokens',
+                          'estimated-thread-cost', 'task-progress']
+    tui['status_line_use_colors'] = True
     table(table(doc, 'shell_environment_policy'), 'set')['PATH'] = state['path']
     servers = table(doc, 'mcp_servers')
     specs = {
