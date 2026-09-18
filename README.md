@@ -167,7 +167,17 @@ mem0-import --dry-run /path/to/documents
 mem0-import /path/to/documents
 ```
 
-대화형 경로 선택은 `mem0-import-prompt`를 사용합니다. 처리 상태와 로그는
+대화형 경로 선택은 `mem0-import-prompt`를 사용합니다. 이 wrapper는 경로를 입력받은
+뒤 import worker를 `nohup`으로 분리합니다. 현재 터미널에는 worker의 진행률 bar와
+파일별 최종 처리 결과가 계속 표시되며, 터미널을 닫아도 worker는 계속 실행됩니다.
+HTTP 200과 vector insert 같은 정상 진단은 숨기고, 경고·오류만 별도 로그에 기록합니다.
+
+```bash
+mem0-import-prompt
+tail -f ~/.codex/toolkit/mem0-sessions/manual-import-errors.*
+```
+
+각 실행은 PID와 이상 로그 파일을 출력합니다. 처리 상태와 로그는
 `~/.codex/toolkit/mem0-sessions/`에 저장됩니다.
 
 ## Headroom 모드
