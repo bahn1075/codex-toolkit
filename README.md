@@ -41,7 +41,7 @@ MCP 전용 모드로 전환할 수 있습니다.
 `setup.sh`와 `update.sh`는 다음 작업을 순서대로 수행합니다.
 
 1. 운영체제, 필수 명령, Node.js 버전과 실행 중인 Codex 프로세스를 검사합니다.
-2. Codex와 MCP 의존성을 설치하거나 업데이트합니다.
+2. Codex와 MCP 의존성을 설치하거나 업데이트하고, 등록된 Serena 프로젝트의 언어 서버를 소스 구성에 맞게 다시 감지합니다.
 3. `~/.codex/config.toml`, 전역 `AGENTS.md`, shell alias를 구성합니다.
 4. Mem0 연결 정보와 hook, Headroom 실행 모드, Superpowers를 구성합니다.
 5. 설정 유효성과 Graft MCP의 실제 시작·도구 목록을 검사합니다.

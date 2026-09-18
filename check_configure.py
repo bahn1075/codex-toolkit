@@ -82,6 +82,7 @@ assert doc['tui']['status_line'] == [
     'estimated-thread-cost', 'task-progress',
 ]
 assert doc['tui']['status_line_use_colors'] is True
+assert 'serena_projects.py' in Path(__file__).with_name('toolkit.sh').read_text()
 assert 'install_memory' not in Path(__file__).with_name('setup.sh').read_text()
 
 with tempfile.TemporaryDirectory() as tmp:

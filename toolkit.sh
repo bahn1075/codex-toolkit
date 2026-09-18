@@ -109,7 +109,7 @@ bootstrap() {
   mkdir -p "$CT_ROOT/bin" "$CT_ROOT/repos" "$CT_ROOT/npm" "$CT_ROOT/logs" "$CT_ROOT/bundle"
   # Keep the installer/update bundle available after the downloaded copy is removed.
   if [ "$SCRIPT_DIR" != "$CT_ROOT/bundle" ]; then
-    for ct_file in setup.sh update.sh toolkit.sh configure.py graft_mcp.py mem0_mcp.py mem0_session.py policy.md README.md check_configure.py check_graft.py check_mem0_session.py; do
+    for ct_file in setup.sh update.sh toolkit.sh configure.py graft_mcp.py mem0_mcp.py mem0_session.py serena_projects.py policy.md README.md check_configure.py check_graft.py check_mem0_session.py; do
       cp "$SCRIPT_DIR/$ct_file" "$CT_ROOT/bundle/$ct_file"
     done
     mkdir -p "$CT_ROOT/bundle/mem0_import"
@@ -189,6 +189,7 @@ install_packages() {
   fi
   [ -s "$ct_repo/AGENTS.md" ] || die 'Ponytail AGENTS.md is missing; upstream layout changed.'
   "$CT_ROOT/bin/serena" init
+  "$CT_ROOT/uv-tools/serena-agent/bin/python" "$SCRIPT_DIR/serena_projects.py"
   "$CT_PY" "$SCRIPT_DIR/configure.py" record-packages
 }
 configure_core() {
