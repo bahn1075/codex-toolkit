@@ -11,3 +11,72 @@ SELECT id,vector, JSON_SERIALIZE(
          TRUNCATE
        ) AS json_text
 FROM MEM0.CODEX_MEMORIES;
+
+-- 실제 적재된 데이터 확인
+SELECT
+    id,
+    JSON_VALUE(
+        payload,
+        '$.updated_at'
+        RETURNING VARCHAR2(4000)
+        NULL ON ERROR
+    ) AS updated_at,
+    JSON_VALUE(
+        payload,
+        '$.source_root'
+        RETURNING VARCHAR2(4000)
+        NULL ON ERROR
+    ) AS source_root,
+    JSON_VALUE(
+        payload,
+        '$.data'
+        RETURNING VARCHAR2(4000)
+        NULL ON ERROR
+    ) AS data
+    -- ,JSON_SERIALIZE(
+    --     payload
+    --     RETURNING VARCHAR2(2048)
+    --     TRUNCATE
+    -- ) AS json_text
+FROM MEM0.CODEX_MEMORIES
+ORDER BY updated_at DESC
+FETCH FIRST 30 ROWS ONLY;
+
+SELECT
+    id,
+    JSON_VALUE(
+        payload,
+        '$.source_root'
+        RETURNING VARCHAR2(4000)
+        NULL ON ERROR
+    ) AS source_root,
+    JSON_VALUE(
+        payload,
+        '$.data'
+        RETURNING VARCHAR2(4000)
+        NULL ON ERROR
+    ) AS data,
+    JSON_SERIALIZE(
+        payload
+        RETURNING VARCHAR2(2048)
+        TRUNCATE
+    ) AS json_text
+FROM MEM0.CODEX_MEMORIES
+WHERE JSON_VALUE(
+          payload,
+          '$.source_root'
+          RETURNING VARCHAR2(4000)
+          NULL ON ERROR
+      ) IS NULL
+ORDER BY id;
+
+
+SELECT DISTINCT
+       JSON_VALUE(
+           payload,
+           '$.source_root'
+           RETURNING VARCHAR2(4000)
+           NULL ON ERROR
+       ) AS source_root
+FROM MEM0.CODEX_MEMORIES
+ORDER BY source_root DESC;
