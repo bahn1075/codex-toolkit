@@ -12,6 +12,7 @@ import sys
 import threading
 import tempfile
 import time
+from urllib.parse import urlparse
 import urllib.request
 from getpass import getpass
 
@@ -226,13 +227,29 @@ def configure():
     launcher('mem0-import-prompt', ['bash', str(BUNDLE / 'mem0_import/import_memories.sh')])
 
 
+def mem0_api_url(prompt, example):
+    """Collect an HTTP(S) model API URL without probing an authenticated service."""
+    print(f'Example: {example}')
+    value = input(f'{prompt}: ').strip().rstrip('/')
+    parsed = urlparse(value)
+    if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.query or parsed.fragment:
+        raise RuntimeError(f'{prompt} must be an absolute HTTP(S) URL without query parameters.')
+    return value
+
+
 def mem0_settings():
-    """Collect the persistent Oracle connection only in an interactive installer."""
+    """Collect persistent Oracle and model API connection settings interactively."""
     if MEM0_CONFIG.exists():
         data = json.loads(MEM0_CONFIG.read_text())
         if 'wallet_password' not in data:
             data['wallet_password'] = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
-            write(MEM0_CONFIG, json.dumps(data, indent=2) + '\n')
+        if 'inference_api_url' not in data:
+            data['inference_api_url'] = mem0_api_url(
+                'Mem0 inference API URL', 'http://HOST/api/v1/chat/completions')
+        if 'embedding_api_url' not in data:
+            data['embedding_api_url'] = mem0_api_url(
+                'Mem0 embedding API URL', 'http://HOST/api/v1/embedding')
+        write(MEM0_CONFIG, json.dumps(data, indent=2) + '\n')
         return
     wallet = pathlib.Path(input('Oracle wallet directory: ').strip()).expanduser()
     if not wallet.is_dir() or not (wallet / 'tnsnames.ora').is_file():
@@ -241,6 +258,10 @@ def mem0_settings():
     password = getpass('Oracle database password: ')
     alias = input('Oracle TNS alias: ').strip()
     wallet_password = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
+    inference_api_url = mem0_api_url(
+        'Mem0 inference API URL', 'http://HOST/api/v1/chat/completions')
+    embedding_api_url = mem0_api_url(
+        'Mem0 embedding API URL', 'http://HOST/api/v1/embedding')
     if not username or not password or not re.fullmatch(r'[A-Za-z0-9_.-]+', alias):
         raise RuntimeError('Username, password and a simple TNS alias are required.')
     if not re.search(rf'(?mi)^\s*{re.escape(alias)}\s*=', (wallet / 'tnsnames.ora').read_text()):
@@ -248,6 +269,7 @@ def mem0_settings():
     write(MEM0_CONFIG, json.dumps({
         'wallet_dir': str(wallet.resolve()), 'username': username,
         'password': password, 'tns_alias': alias, 'wallet_password': wallet_password,
+        'inference_api_url': inference_api_url, 'embedding_api_url': embedding_api_url,
     }, indent=2) + '\n')
 
 

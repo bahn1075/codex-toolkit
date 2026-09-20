@@ -3,17 +3,38 @@
 import json
 import os
 import pathlib
+from urllib.parse import urlparse, urlunparse
 
 from mcp.server.fastmcp import FastMCP
 from mem0 import Memory
 
 
 CONFIG = pathlib.Path.home() / ".codex" / "mem0.json"
-LOCAL_OPENAI_BASE_URL = "http://mac.tail651fca.ts.net:1234/v1"
+
+
+def api_base_url(api_url, endpoint):
+    """Convert a configured OpenAI-compatible endpoint URL to its client base URL."""
+    parsed = urlparse(api_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("Mem0 model API URLs must be absolute HTTP(S) URLs without query parameters")
+    path = parsed.path.rstrip('/')
+    for suffix in endpoint:
+        if path.endswith(suffix):
+            path = path[:-len(suffix)]
+            break
+    return urlunparse((parsed.scheme, parsed.netloc, path or '/', '', '', '')).rstrip('/')
 
 
 def memory():
     data = json.loads(CONFIG.read_text(encoding="utf-8"))
+    try:
+        inference_base_url = api_base_url(
+            data["inference_api_url"], ("/chat/completions", "/chat/completion", "/inference"))
+        embedding_base_url = api_base_url(
+            data["embedding_api_url"], ("/embeddings", "/embedding"))
+    except KeyError as error:
+        raise RuntimeError(
+            'Mem0 model API URLs are missing. Run setup.sh --resume to configure them.') from error
     wallet = data["wallet_dir"]
     os.environ["TNS_ADMIN"] = wallet
     connection_params = {
@@ -24,7 +45,7 @@ def memory():
         connection_params["wallet_password"] = data["wallet_password"]
     return Memory.from_config({
         "llm": {"provider": "lmstudio", "config": {
-            "model": "qwen3.8-27b-mlx", "lmstudio_base_url": LOCAL_OPENAI_BASE_URL,
+            "model": "qwen3.8-27b-mlx", "lmstudio_base_url": inference_base_url,
             "api_key": "local-no-key",
             "lmstudio_response_format": {"type": "json_schema", "json_schema": {
                 "name": "mem0_facts", "schema": {
@@ -36,7 +57,7 @@ def memory():
             }},
         }},
         "embedder": {"provider": "openai", "config": {
-            "model": "text-embedding-bge-m3", "openai_base_url": LOCAL_OPENAI_BASE_URL,
+            "model": "text-embedding-bge-m3", "openai_base_url": embedding_base_url,
             "api_key": "local-no-key", "embedding_dims": 1024,
         }},
         "vector_store": {"provider": "oracledb", "config": {

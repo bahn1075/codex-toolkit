@@ -29,9 +29,9 @@ Close Codex, Codex app and VS Code before running. Do not run with sudo.
 Optional environment settings (first installation):
   CT_HEADROOM_MODE=proxy|mcp       default: proxy (persistent native runtime)
   CT_AUTH=chatgpt                 this bundle uses manual ChatGPT login
-Mem0 uses Oracle AI Vector Search and the Tailscale mac model server. Setup prompts
-for the Oracle wallet, database username/password, TNS alias and wallet password; secrets stay in
-~/.codex/mem0.json (mode 600) and are never written to install-state or logs.
+Mem0 uses Oracle AI Vector Search and user-specified inference/embedding APIs. Setup prompts
+for the Oracle wallet, database username/password, TNS alias, wallet password and model API URLs;
+secrets stay in ~/.codex/mem0.json (mode 600) and are never written to install-state or logs.
 EOF
 }
 preflight() {

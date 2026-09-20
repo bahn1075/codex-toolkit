@@ -90,11 +90,17 @@ with tempfile.TemporaryDirectory() as tmp:
     (wallet / 'tnsnames.ora').write_text('demo_medium = (DESCRIPTION=...)\n')
     target = Path(tmp) / 'mem0.json'
     with patch.object(c, 'MEM0_CONFIG', target), \
-            patch('builtins.input', side_effect=[str(wallet), 'dbuser', 'demo_medium']), \
+            patch('builtins.input', side_effect=[
+                str(wallet), 'dbuser', 'demo_medium',
+                'http://inference.example/api/v1/chat/completions',
+                'http://embedding.example/api/v1/embedding']), \
             patch.object(c, 'getpass', side_effect=['secret', 'wallet-secret']):
         c.mem0_settings()
-    assert json.loads(target.read_text())['tns_alias'] == 'demo_medium'
-    assert json.loads(target.read_text())['wallet_password'] == 'wallet-secret'
+    mem0 = json.loads(target.read_text())
+    assert mem0['tns_alias'] == 'demo_medium'
+    assert mem0['wallet_password'] == 'wallet-secret'
+    assert mem0['inference_api_url'].endswith('/chat/completions')
+    assert mem0['embedding_api_url'].endswith('/embedding')
     assert target.stat().st_mode & 0o777 == 0o600
 
 with patch.object(c.shutil, 'which', return_value='/kubectl'), \

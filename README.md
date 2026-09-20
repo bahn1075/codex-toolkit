@@ -12,7 +12,7 @@ macOS와 Linux에서 Codex CLI·VS Code 확장과 개발용 MCP를 한 번에 �
 | 지침·플러그인 | Ponytail 지침, Superpowers 플러그인 |
 | 편의 명령 | `codex-update`, `codex-doctor`, `mem0-import` |
 
-Mem0는 Oracle AI Vector Search와 Tailscale의 `mac` 모델 서버를 사용합니다.
+Mem0는 Oracle AI Vector Search와 사용자가 지정한 추론·임베딩 API를 사용합니다.
 Headroom은 기본적으로 로컬 프록시를 상주 실행하며, 사용할 수 없는 환경에서는
 MCP 전용 모드로 전환할 수 있습니다.
 
@@ -53,7 +53,9 @@ bash setup.sh
 ```
 
 설치 중 Mem0 연결에 필요한 Oracle wallet 디렉터리, DB 계정, TNS alias와 wallet
-비밀번호를 입력합니다. 비밀값은 권한 `600`인 `~/.codex/mem0.json`에만 저장됩니다.
+비밀번호, 추론·임베딩 API URL을 입력합니다. 각 URL 프롬프트 전에
+`http://HOST/api/v1/chat/completions`, `http://HOST/api/v1/embedding` 예시가 표시됩니다.
+입력 URL은 권한 `600`인 `~/.codex/mem0.json`에만 저장됩니다.
 
 완료 후 새 터미널을 열고 다음 순서로 확인합니다.
 
@@ -83,7 +85,7 @@ codex plugin add superpowers@openai-curated-remote
 
 - `~/.codex`를 이동하거나 새로 만들지 않아 로그인, 대화 기록과 사용자 설정을 유지합니다.
 - 설치 상태를 재사용하면서 패키지, MCP 실행 경로, 전역 지침과 hook을 다시 확인합니다.
-- Mem0 설정 파일이 없으면 Oracle 연결 정보를 다시 입력받고, 있으면 기존 값을 재사용합니다.
+- Mem0 설정 파일이 없으면 Oracle 연결 정보와 모델 API URL을 다시 입력받고, 있으면 기존 값을 재사용합니다.
 - Graft 실행 경로를 다시 등록하고 임시 Git 저장소에서 MCP 시작과 도구 제공을 검증합니다.
 - 모든 설치 단계를 다시 실행하므로 네트워크가 필요하고 다소 시간이 걸릴 수 있습니다.
 
@@ -118,7 +120,8 @@ bash ~/.codex/toolkit/bundle/setup.sh --resume
 codex-doctor
 ```
 
-기존 `mem0.json`이 있으면 `--resume`은 그 값을 덮어쓰거나 다시 묻지 않습니다.
+기존 `mem0.json`의 값은 `--resume`에서 덮어쓰거나 다시 묻지 않습니다. 다만 이전
+버전에서 생성된 파일처럼 모델 API URL이 없는 경우에는 누락된 URL만 입력받습니다.
 연결 정보 자체를 바꿀 때는 권한 `600`을 유지하며 해당 파일을 먼저 수정한 뒤
 `--resume`을 실행하세요. 완료 후 Codex를 다시 시작해 `/mcp`에서 `mem0`,
 `/hooks`에서 두 hook을 확인합니다.
