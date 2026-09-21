@@ -86,6 +86,16 @@ assert doc['tui']['status_line_use_colors'] is True
 assert 'serena_projects.py' in Path(__file__).with_name('toolkit.sh').read_text()
 assert 'install_memory' not in Path(__file__).with_name('setup.sh').read_text()
 
+computer_use_doc = tomlkit.parse('''[mcp_servers.node_repl.env]
+SKY_CUA_SERVICE_PATH = "/Applications/Codex Computer Use.app"
+[mcp_servers.computer-use]
+command = "./Codex Computer Use.app/Contents/MacOS/client"
+cwd = "."
+''')
+c.normalize_computer_use_path(computer_use_doc)
+assert computer_use_doc['mcp_servers']['computer-use']['command'] == \
+    '/Applications/Codex Computer Use.app/Contents/MacOS/client'
+
 headroom_doc = tomlkit.parse('''model_provider = "headroom"
 openai_base_url = "http://127.0.0.1:18787/v1"
 [model_providers.headroom]

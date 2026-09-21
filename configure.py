@@ -129,6 +129,19 @@ def launcher(name, args, prefix=''):
     return str(path)
 
 
+def normalize_computer_use_path(doc):
+    """Make ChatGPT Desktop's legacy Computer Use MCP command independent of cwd."""
+    servers = doc.get('mcp_servers', {})
+    entry = servers.get('computer-use')
+    policy = doc.get('shell_environment_policy', {}).get('set', {})
+    node_repl_env = servers.get('node_repl', {}).get('env', {})
+    root = str(policy.get('SKY_CUA_SERVICE_PATH') or node_repl_env.get('SKY_CUA_SERVICE_PATH') or '')
+    command = str(entry.get('command', '')) if entry else ''
+    prefix = './Codex Computer Use.app/'
+    if os.path.isabs(root) and command.startswith(prefix):
+        entry['command'] = str(pathlib.Path(root) / command[len(prefix):])
+
+
 def configure():
     state = read_state()
     state['path'] = safe_path()
@@ -154,6 +167,7 @@ def configure():
                           'estimated-thread-cost', 'task-progress']
     tui['status_line_use_colors'] = True
     table(table(doc, 'shell_environment_policy'), 'set')['PATH'] = state['path']
+    normalize_computer_use_path(doc)
     servers = table(doc, 'mcp_servers')
     specs = {
         'serena': (str(ROOT / 'bin/serena'), ['start-mcp-server', '--context=codex',
