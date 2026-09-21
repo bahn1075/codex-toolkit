@@ -42,7 +42,7 @@ class Saved(Exception):
 
 def check_configure(existing, state=None):
     doc = tomlkit.parse(existing)
-    with patch.dict(c.os.environ, CT_PREFIX='/tools', CT_UV='/uv', CT_NPM='/npm', CT_NODE='/selected/node'), \
+    with patch.dict(c.os.environ, CT_PREFIX='/tools', CT_CODEX='/native/codex', CT_UV='/uv', CT_NPM='/npm', CT_NODE='/selected/node'), \
             patch.object(c, 'read_state', return_value=state or {}), \
             patch.object(c, 'save_state'), \
             patch.object(c, 'executable', return_value='/node'), \
@@ -56,6 +56,7 @@ def check_configure(existing, state=None):
             pass
     restored = tomlkit.parse(tomlkit.dumps(doc))
     assert restored['mcp_servers']['context7']['command'] == '/selected/node'
+    assert restored['tui']['status_line_use_colors'] is True
     assert restored['mcp_servers']['graft']['env']['PATH'].split(c.os.pathsep)[0] == '/selected'
     assert restored['features']['hooks'] is True
     assert 'codex_hooks' not in restored['features']
@@ -101,6 +102,35 @@ assert headroom_doc['model_providers']['other']['name'] == 'Other provider'
 toolkit = Path(__file__).with_name('toolkit.sh').read_text()
 assert 'CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-mcp}' in toolkit
 assert 'CT_HEADROOM_MODE must be mcp.' in toolkit
+assert "state['codex'] = os.environ['CT_CODEX']" in Path(__file__).with_name('configure.py').read_text()
+
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp) / 'home'
+    home.mkdir()
+    result = subprocess.run(['bash', '-c', r'''
+set -Eeuo pipefail
+source "$1/toolkit.sh"
+mock_brew() {
+  case "$*" in
+    'list --formula codex'|'list --cask codex') return 0 ;;
+    'uninstall --formula codex'|'uninstall --cask codex') printf '%s\n' "$*" ;;
+    *) exit 99 ;;
+  esac
+}
+mock_curl() {
+  printf '%s\n' 'mkdir -p "$HOME/.local/bin"'
+  printf '%s\n' 'printf "#!/bin/sh\\necho native-codex\\n" > "$HOME/.local/bin/codex"'
+  printf '%s\n' 'chmod +x "$HOME/.local/bin/codex"'
+}
+CT_BREW=mock_brew
+install_codex
+printf 'CODEX=%s\n' "$CT_CODEX"
+''', 'check', str(Path(__file__).resolve().parent)], env={**__import__('os').environ, 'HOME': str(home)},
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert 'uninstall --formula codex' in result.stdout
+    assert 'uninstall --cask codex' in result.stdout
+    assert f'CODEX={home}/.local/bin/codex' in result.stdout
 
 with tempfile.TemporaryDirectory() as tmp:
     wallet = Path(tmp) / 'wallet'; wallet.mkdir()
@@ -144,6 +174,24 @@ with tempfile.TemporaryDirectory() as tmp:
     assert output.getvalue().count('기존값을 그대로 사용하시겠습니까?') == 2
     assert curl_calls == 2
     assert '입력하신 경로가 정상작동하였습니다. 해당 값으로 확정합니다' in output.getvalue()
+
+with tempfile.TemporaryDirectory() as tmp:
+    target = Path(tmp) / 'mem0.json'
+    target.write_text(json.dumps({
+        'wallet_password': '',
+        'inference_api_url': 'http://unavailable.example/v1/chat/completions',
+        'embedding_api_url': 'http://embedding.example/v1/embedding',
+    }))
+    failed = subprocess.CompletedProcess([], 7, '', 'curl: (7) Connection refused')
+    succeeded = subprocess.CompletedProcess([], 0, '{}', '')
+    with patch.object(c, 'MEM0_CONFIG', target), \
+            patch('builtins.input', side_effect=['', 'https://working.example/v1/chat/completions', '']), \
+            patch.object(c.subprocess, 'run', side_effect=[failed, succeeded, succeeded]), \
+            contextlib.redirect_stdout(io.StringIO()) as output:
+        c.mem0_settings()
+    mem0 = json.loads(target.read_text())
+    assert mem0['inference_api_url'] == 'https://working.example/v1/chat/completions'
+    assert '해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.' in output.getvalue()
 
 with patch.object(c.shutil, 'which', return_value='/kubectl'), \
         patch.object(c.subprocess, 'run') as run, contextlib.redirect_stdout(io.StringIO()):

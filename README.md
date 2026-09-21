@@ -7,14 +7,13 @@ macOS와 Linux에서 Codex CLI·VS Code 확장과 개발용 MCP를 한 번에 �
 
 | 구분 | 구성 요소 |
 |---|---|
-| Codex | Homebrew Codex CLI, VS Code `openai.chatgpt` 확장 |
+| Codex | 공식 native Codex CLI, VS Code `openai.chatgpt` 확장 |
 | MCP | Serena, Graft, Kubernetes MCP, Context7, Headroom, Mem0 |
 | 지침·플러그인 | Ponytail 지침, Superpowers 플러그인 |
 | 편의 명령 | `codex-update`, `codex-doctor`, `mem0-import` |
 
 Mem0는 Oracle AI Vector Search와 사용자가 지정한 추론·임베딩 API를 사용합니다.
-Headroom은 기본적으로 로컬 프록시를 상주 실행하며, 사용할 수 없는 환경에서는
-MCP 전용 모드로 전환할 수 있습니다.
+Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지 않습니다.
 
 ## 설치 전 확인
 
@@ -24,7 +23,7 @@ MCP 전용 모드로 전환할 수 있습니다.
 > 프로젝트 안의 `.codex/config.toml`과 `AGENTS.md`는 건드리지 않습니다.
 
 - 지원 환경: macOS 또는 Linux, Bash 3.2 이상
-- 사전 명령: Homebrew, Node.js 22 이상, npm, uv, git, python3, Bun
+- 사전 명령: Homebrew, curl, Node.js 22 이상, npm, uv, git, python3, Bun
 - Graft 빌드 도구: C/C++ 컴파일러와 make(macOS는 Xcode Command Line Tools)
 - 설치 디렉터리는 `~/.codex` 밖에 두고 일반 사용자로 실행합니다. `sudo`를 쓰지 마세요.
 - 실행 중인 Codex CLI, Codex 앱, VS Code를 모두 종료하세요.
@@ -41,10 +40,12 @@ MCP 전용 모드로 전환할 수 있습니다.
 `setup.sh`와 `update.sh`는 다음 작업을 순서대로 수행합니다.
 
 1. 운영체제, 필수 명령, Node.js 버전과 실행 중인 Codex 프로세스를 검사합니다.
-2. Codex와 MCP 의존성을 설치하거나 업데이트하고, 등록된 Serena 프로젝트의 언어 서버를 소스 구성에 맞게 다시 감지합니다.
+2. 공식 native installer로 Codex를 설치하거나 업데이트하고(기존 Homebrew Codex formula/cask는 제거), MCP 의존성과 등록된 Serena 프로젝트의 언어 서버를 다시 맞춥니다.
 3. `~/.codex/config.toml`, 전역 `AGENTS.md`, shell alias를 구성합니다.
 4. Mem0 연결 정보와 hook, Headroom 실행 모드, Superpowers를 구성합니다.
 5. 설정 유효성과 Graft MCP의 실제 시작·도구 목록을 검사합니다.
+
+Codex native CLI는 기본적으로 `~/.local/bin/codex`에 설치됩니다.
 
 ### 최초 설치
 

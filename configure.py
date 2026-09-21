@@ -132,7 +132,7 @@ def launcher(name, args, prefix=''):
 def configure():
     state = read_state()
     state['path'] = safe_path()
-    state['codex'] = os.environ['CT_PREFIX'] + '/bin/codex'
+    state['codex'] = os.environ['CT_CODEX']
     state['node'] = os.environ.get('CT_NODE') or executable('node')
     state['uv'] = os.environ['CT_UV']
     state['npm'] = os.environ['CT_NPM']
@@ -197,7 +197,7 @@ def configure():
     write(instructions, text)
     # Aliases only select the same real Codex binary; no launch-time wrapping needed.
     init = ROOT / 'shell-init.sh'
-    shell_prefix = os.pathsep.join([str(ROOT / 'bin'), str(ROOT / 'npm/node_modules/.bin'),
+    shell_prefix = os.pathsep.join([os.path.dirname(state['codex']), str(ROOT / 'bin'), str(ROOT / 'npm/node_modules/.bin'),
                                   os.environ['CT_PREFIX'] + '/bin', os.environ['CT_PREFIX'] + '/sbin'])
     init_text = ('# Generated Codex toolkit shell integration\n'
         + 'export PATH=' + shlex.quote(shell_prefix) + ':"$PATH"\n'
@@ -230,34 +230,48 @@ def configure():
 def mem0_api_url(prompt, example, payload, existing=None):
     """Collect an HTTP(S) model API URL without probing an authenticated service."""
     print(f'Example: {example}')
-    if existing:
-        print(f'{prompt} existing value: {existing}')
-        print('기존값을 그대로 사용하시겠습니까? (엔터 시 기존값 그대로 사용) 아니면 새로운 경로를 입력해주세요: ')
-        value = input()
-    else:
-        value = input(f'{prompt}: ')
-    value = value.strip().rstrip('/')
-    if not value and existing:
-        value = existing
-    parsed = urlparse(value)
-    if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.query or parsed.fragment:
-        raise RuntimeError(f'{prompt} must be an absolute HTTP(S) URL without query parameters.')
     curl = shutil.which('curl')
     if not curl:
         raise RuntimeError('curl is required to validate Mem0 model API URLs.')
-    print('안내: API URL을 검증합니다. (curl로 단순 테스트 수행)')
-    print('Test가 진행중입니다')
-    result = subprocess.run([
-        curl, '--fail', '--silent', '--show-error', '--max-time', '10',
-        '--request', 'POST', value,
-        '--header', 'Authorization: Bearer local-no-key',
-        '--header', 'Content-Type: application/json',
-        '--data', json.dumps(payload),
-    ], capture_output=True, text=True, timeout=15)
-    if result.returncode:
-        raise RuntimeError(f'{prompt} validation failed: {result.stderr.strip() or "curl request failed"}')
-    print('입력하신 경로가 정상작동하였습니다. 해당 값으로 확정합니다')
-    return value
+    retrying = False
+    while True:
+        if existing and not retrying:
+            print(f'{prompt} existing value: {existing}')
+            print('기존값을 그대로 사용하시겠습니까? (엔터 시 기존값 그대로 사용) 아니면 새로운 경로를 입력해주세요: ')
+            value = input()
+        else:
+            value = input(f'{prompt}: ')
+        value = value.strip().rstrip('/')
+        if not value and existing and not retrying:
+            value = existing
+        parsed = urlparse(value)
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.query or parsed.fragment:
+            print(f'{prompt} must be an absolute HTTP(S) URL without query parameters.')
+            print('해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.')
+            retrying = True
+            continue
+        print('안내: API URL을 검증합니다. (curl로 단순 테스트 수행)')
+        print('Test가 진행중입니다')
+        try:
+            result = subprocess.run([
+                curl, '--fail', '--silent', '--show-error', '--max-time', '10',
+                '--request', 'POST', value,
+                '--header', 'Authorization: Bearer local-no-key',
+                '--header', 'Content-Type: application/json',
+                '--data', json.dumps(payload),
+            ], capture_output=True, text=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            print(f'{prompt} validation failed: curl request timed out')
+            print('해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.')
+            retrying = True
+            continue
+        if result.returncode:
+            print(f'{prompt} validation failed: {result.stderr.strip() or "curl request failed"}')
+            print('해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.')
+            retrying = True
+            continue
+        print('입력하신 경로가 정상작동하였습니다. 해당 값으로 확정합니다')
+        return value
 
 
 def mem0_settings():

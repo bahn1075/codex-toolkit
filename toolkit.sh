@@ -44,7 +44,7 @@ preflight() {
   case "$HOME$SCRIPT_DIR" in *$'\n'*|*$'\r'*) die 'Newlines in paths are unsupported.' ;; esac
   case "$SCRIPT_DIR/" in "$CT_HOME/"*) die 'Extract this bundle outside ~/.codex before setup.' ;; esac
   [ ! -L "$CT_HOME" ] || die '~/.codex is a symlink; resolve its intended target before resetting.'
-  for ct_cmd in brew npm node uv git python3 bun; do
+  for ct_cmd in brew curl npm node uv git python3 bun; do
     command -v "$ct_cmd" >/dev/null || die "Required command missing: $ct_cmd"
   done
   CT_BREW=$(command -v brew)
@@ -57,7 +57,7 @@ preflight() {
   fi
   "$CT_NODE" -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)' || die 'Node.js 22+ is required alongside the selected npm.'
   CT_PREFIX=$("$CT_BREW" --prefix)
-  export PATH="$(dirname "$CT_NODE"):$CT_PREFIX/bin:$CT_PREFIX/sbin:$PATH"
+  export PATH="$HOME/.local/bin:$(dirname "$CT_NODE"):$CT_PREFIX/bin:$CT_PREFIX/sbin:$PATH"
   # Do not initialize/reset an actively running Codex process.
   if command -v pgrep >/dev/null && pgrep -u "$(id -u)" -x codex >/dev/null 2>&1; then
     die 'A codex process is running. Close Codex/VS Code sessions and run again.'
@@ -71,6 +71,10 @@ acquire_lock() {
 }
 cleanup() {
   if [ "$CT_LOCK_HELD" = 1 ]; then rmdir "$HOME/.codex-toolkit-setup.lock" 2>/dev/null || true; fi
+}
+remove_homebrew_codex() {
+  if "$CT_BREW" list --formula codex >/dev/null 2>&1; then "$CT_BREW" uninstall --formula codex; fi
+  if "$CT_BREW" list --cask codex >/dev/null 2>&1; then "$CT_BREW" uninstall --cask codex; fi
 }
 reset_codex() {
   CT_STAGE=reset
@@ -95,10 +99,7 @@ reset_codex() {
   printf '%s\n' "$CT_BACKUP" > "$CT_HOME/previous-home.txt"
   # Remove only the active npm prefix's Codex package. Other prefixes are reported later.
   if [ -d "$("$CT_NPM" root -g)/@openai/codex" ]; then "$CT_NPM" uninstall -g @openai/codex; fi
-  if "$CT_BREW" list --formula codex >/dev/null 2>&1; then "$CT_BREW" uninstall --formula codex; fi
-  if "$CT_BREW" list --cask codex >/dev/null 2>&1; then
-    "$CT_BREW" uninstall --cask codex
-  fi
+  remove_homebrew_codex
 }
 bootstrap() {
   CT_STAGE=bootstrap
@@ -124,7 +125,7 @@ bootstrap() {
   CT_PY="$CT_ROOT/venv/bin/python"
   export UV_TOOL_DIR="$CT_ROOT/uv-tools"
   export UV_TOOL_BIN_DIR="$CT_ROOT/bin"
-  export PATH="$(dirname "$CT_NODE"):$CT_ROOT/bin:$CT_ROOT/npm/node_modules/.bin:$CT_PREFIX/bin:$PATH"
+  export PATH="$HOME/.local/bin:$(dirname "$CT_NODE"):$CT_ROOT/bin:$CT_ROOT/npm/node_modules/.bin:$CT_PREFIX/bin:$PATH"
   CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-mcp}
   [ "$CT_HEADROOM_MODE" = mcp ] || die 'CT_HEADROOM_MODE must be mcp.'
   export CT_HEADROOM_MODE CT_PREFIX CT_UV CT_NPM CT_NODE
@@ -142,21 +143,13 @@ snapshot_configuration() {
 }
 install_packages() {
   CT_STAGE=packages
-  note 'Installing/updating Codex and Kubernetes MCP through Homebrew.'
-  # Current official Codex cask advertises macOS and Linux binaries.
-  if "$CT_BREW" list --cask codex >/dev/null 2>&1; then
-    "$CT_BREW" upgrade --cask codex
-  else
-    "$CT_BREW" install --cask codex
-  fi
+  install_codex
+  note 'Installing/updating Kubernetes MCP through Homebrew.'
   if "$CT_BREW" list --formula kubernetes-mcp-server >/dev/null 2>&1; then
     "$CT_BREW" upgrade --formula kubernetes-mcp-server
   else
     "$CT_BREW" install --formula kubernetes-mcp-server
   fi
-  CT_CODEX="$CT_PREFIX/bin/codex"
-  [ -x "$CT_CODEX" ] || die 'Homebrew Codex binary is missing.'
-  "$CT_CODEX" --version
   # Official Python packages; isolated from the user's other uv tools.
   "$CT_UV" tool install --upgrade --python "$CT_BOOT_PY" serena-agent
   "$CT_UV" tool install --upgrade --python "$CT_BOOT_PY" 'headroom-ai[all]'
@@ -188,6 +181,15 @@ install_packages() {
   "$CT_ROOT/bin/serena" init
   "$CT_ROOT/uv-tools/serena-agent/bin/python" "$SCRIPT_DIR/serena_projects.py"
   "$CT_PY" "$SCRIPT_DIR/configure.py" record-packages
+}
+install_codex() {
+  note 'Installing/updating Codex with the official native installer.'
+  remove_homebrew_codex
+  CT_CODEX="$HOME/.local/bin/codex"
+  curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
+  [ -x "$CT_CODEX" ] || die "Native Codex binary is missing: $CT_CODEX"
+  export CT_CODEX
+  "$CT_CODEX" --version
 }
 configure_core() {
   CT_STAGE=configuration
