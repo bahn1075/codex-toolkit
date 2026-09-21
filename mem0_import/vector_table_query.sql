@@ -23,12 +23,6 @@ SELECT
     ) AS updated_at,
     JSON_VALUE(
         payload,
-        '$.source_root'
-        RETURNING VARCHAR2(4000)
-        NULL ON ERROR
-    ) AS source_root,
-    JSON_VALUE(
-        payload,
         '$.data'
         RETURNING VARCHAR2(4000)
         NULL ON ERROR
@@ -40,16 +34,17 @@ SELECT
     -- ) AS json_text
 FROM MEM0.CODEX_MEMORIES
 ORDER BY updated_at DESC
-FETCH FIRST 30 ROWS ONLY;
+-- FETCH FIRST 30 ROWS ONLY
+;
 
 SELECT
     id,
     JSON_VALUE(
         payload,
-        '$.source_root'
+        '$.updated_at'
         RETURNING VARCHAR2(4000)
         NULL ON ERROR
-    ) AS source_root,
+    ) AS updated_at,
     JSON_VALUE(
         payload,
         '$.data'
@@ -71,14 +66,36 @@ WHERE JSON_VALUE(
 ORDER BY id;
 
 -- 파일별
-SELECT DISTINCT
-       JSON_VALUE(
-           payload,
-           '$.source_root'
-           RETURNING VARCHAR2(4000)
-           NULL ON ERROR
-       ) AS source_root
-FROM MEM0.CODEX_MEMORIES
+WITH memory_values AS (
+    SELECT
+        JSON_VALUE(
+            payload,
+            '$.source_root'
+            RETURNING VARCHAR2(4000)
+            NULL ON ERROR
+        ) AS source_root,
+        JSON_VALUE(
+            payload,
+            '$.updated_at'
+            RETURNING VARCHAR2(4000)
+            NULL ON ERROR
+        ) AS updated_at
+    FROM MEM0.CODEX_MEMORIES
+), parsed_values AS (
+    SELECT
+        source_root,
+        TO_TIMESTAMP(
+            SUBSTR(updated_at, 1, 19),
+            'YYYY-MM-DD"T"HH24:MI:SS'
+        ) AS updated_at
+    FROM memory_values
+)
+SELECT
+    source_root,
+    COUNT(*) AS row_count,
+    TO_CHAR(MAX(updated_at), 'YYYY-MM-DD HH24:MI:SS') AS max_updated_at
+FROM parsed_values
+GROUP BY source_root
 ORDER BY source_root DESC;
 
 
@@ -136,3 +153,7 @@ where     JSON_VALUE(
     )  like '%vkfrhd%';
 
     commit;
+
+
+grant GRAPH_DEVELOPER to mem0;
+ALTER USER MEM0 GRANT CONNECT THROUGH GRAPH$PROXY_USER;
