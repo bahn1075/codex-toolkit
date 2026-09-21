@@ -227,13 +227,36 @@ def configure():
     launcher('mem0-import-prompt', ['bash', str(BUNDLE / 'mem0_import/import_memories.sh')])
 
 
-def mem0_api_url(prompt, example):
+def mem0_api_url(prompt, example, payload, existing=None):
     """Collect an HTTP(S) model API URL without probing an authenticated service."""
     print(f'Example: {example}')
-    value = input(f'{prompt}: ').strip().rstrip('/')
+    if existing:
+        print(f'{prompt} existing value: {existing}')
+        print('기존값을 그대로 사용하시겠습니까? (엔터 시 기존값 그대로 사용) 아니면 새로운 경로를 입력해주세요: ')
+        value = input()
+    else:
+        value = input(f'{prompt}: ')
+    value = value.strip().rstrip('/')
+    if not value and existing:
+        value = existing
     parsed = urlparse(value)
     if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.query or parsed.fragment:
         raise RuntimeError(f'{prompt} must be an absolute HTTP(S) URL without query parameters.')
+    curl = shutil.which('curl')
+    if not curl:
+        raise RuntimeError('curl is required to validate Mem0 model API URLs.')
+    print('안내: API URL을 검증합니다. (curl로 단순 테스트 수행)')
+    print('Test가 진행중입니다')
+    result = subprocess.run([
+        curl, '--fail', '--silent', '--show-error', '--max-time', '10',
+        '--request', 'POST', value,
+        '--header', 'Authorization: Bearer local-no-key',
+        '--header', 'Content-Type: application/json',
+        '--data', json.dumps(payload),
+    ], capture_output=True, text=True, timeout=15)
+    if result.returncode:
+        raise RuntimeError(f'{prompt} validation failed: {result.stderr.strip() or "curl request failed"}')
+    print('입력하신 경로가 정상작동하였습니다. 해당 값으로 확정합니다')
     return value
 
 
@@ -245,10 +268,21 @@ def mem0_settings():
             data['wallet_password'] = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
         if 'inference_api_url' not in data:
             data['inference_api_url'] = mem0_api_url(
-                'Mem0 inference API URL', 'http://HOST/api/v1/chat/completions')
+                'Mem0 inference API URL', 'http://HOST/api/v1/chat/completions',
+                {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1})
+        else:
+            data['inference_api_url'] = mem0_api_url(
+                'Mem0 inference API URL', 'http://HOST/api/v1/chat/completions',
+                {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1},
+                data['inference_api_url'])
         if 'embedding_api_url' not in data:
             data['embedding_api_url'] = mem0_api_url(
-                'Mem0 embedding API URL', 'http://HOST/api/v1/embedding')
+                'Mem0 embedding API URL', 'http://HOST/api/v1/embedding',
+                {'model': 'text-embedding-bge-m3', 'input': 'ping'})
+        else:
+            data['embedding_api_url'] = mem0_api_url(
+                'Mem0 embedding API URL', 'http://HOST/api/v1/embedding',
+                {'model': 'text-embedding-bge-m3', 'input': 'ping'}, data['embedding_api_url'])
         write(MEM0_CONFIG, json.dumps(data, indent=2) + '\n')
         return
     wallet = pathlib.Path(input('Oracle wallet directory: ').strip()).expanduser()
@@ -259,9 +293,11 @@ def mem0_settings():
     alias = input('Oracle TNS alias: ').strip()
     wallet_password = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
     inference_api_url = mem0_api_url(
-        'Mem0 inference API URL', 'http://HOST/api/v1/chat/completions')
+        'Mem0 inference API URL', 'http://HOST/api/v1/chat/completions',
+        {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1})
     embedding_api_url = mem0_api_url(
-        'Mem0 embedding API URL', 'http://HOST/api/v1/embedding')
+        'Mem0 embedding API URL', 'http://HOST/api/v1/embedding',
+        {'model': 'text-embedding-bge-m3', 'input': 'ping'})
     if not username or not password or not re.fullmatch(r'[A-Za-z0-9_.-]+', alias):
         raise RuntimeError('Username, password and a simple TNS alias are required.')
     if not re.search(rf'(?mi)^\s*{re.escape(alias)}\s*=', (wallet / 'tnsnames.ora').read_text()):
@@ -345,6 +381,9 @@ def direct_provider():
         del doc['model_provider']
     if 'openai_base_url' in doc and '127.0.0.1:18787' in str(doc['openai_base_url']):
         del doc['openai_base_url']
+    providers = doc.get('model_providers')
+    if providers and 'headroom' in providers:
+        del providers['headroom']
     save_config(doc)
 
 

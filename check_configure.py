@@ -85,6 +85,23 @@ assert doc['tui']['status_line_use_colors'] is True
 assert 'serena_projects.py' in Path(__file__).with_name('toolkit.sh').read_text()
 assert 'install_memory' not in Path(__file__).with_name('setup.sh').read_text()
 
+headroom_doc = tomlkit.parse('''model_provider = "headroom"
+openai_base_url = "http://127.0.0.1:18787/v1"
+[model_providers.headroom]
+name = "Headroom persistent proxy"
+[model_providers.other]
+name = "Other provider"
+''')
+with patch.object(c, 'config', return_value=headroom_doc), patch.object(c, 'save_config'):
+    c.direct_provider()
+assert 'model_provider' not in headroom_doc
+assert 'openai_base_url' not in headroom_doc
+assert 'headroom' not in headroom_doc['model_providers']
+assert headroom_doc['model_providers']['other']['name'] == 'Other provider'
+toolkit = Path(__file__).with_name('toolkit.sh').read_text()
+assert 'CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-mcp}' in toolkit
+assert 'CT_HEADROOM_MODE must be mcp.' in toolkit
+
 with tempfile.TemporaryDirectory() as tmp:
     wallet = Path(tmp) / 'wallet'; wallet.mkdir()
     (wallet / 'tnsnames.ora').write_text('demo_medium = (DESCRIPTION=...)\n')
@@ -94,14 +111,39 @@ with tempfile.TemporaryDirectory() as tmp:
                 str(wallet), 'dbuser', 'demo_medium',
                 'http://inference.example/api/v1/chat/completions',
                 'http://embedding.example/api/v1/embedding']), \
-            patch.object(c, 'getpass', side_effect=['secret', 'wallet-secret']):
+            patch.object(c, 'getpass', side_effect=['secret', 'wallet-secret']), \
+            patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{}', '')) as curl:
         c.mem0_settings()
+        curl_calls = curl.call_count
     mem0 = json.loads(target.read_text())
     assert mem0['tns_alias'] == 'demo_medium'
     assert mem0['wallet_password'] == 'wallet-secret'
     assert mem0['inference_api_url'].endswith('/chat/completions')
     assert mem0['embedding_api_url'].endswith('/embedding')
     assert target.stat().st_mode & 0o777 == 0o600
+    assert curl_calls == 2
+
+with tempfile.TemporaryDirectory() as tmp:
+    target = Path(tmp) / 'mem0.json'
+    target.write_text(json.dumps({
+        'wallet_password': '',
+        'inference_api_url': 'http://inference.example/api/v1/chat/completions',
+        'embedding_api_url': 'http://embedding.example/api/v1/embedding',
+    }))
+    with patch.object(c, 'MEM0_CONFIG', target), \
+            patch('builtins.input', side_effect=['', 'https://new.example/api/v1/embedding']), \
+            patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{}', '')) as curl, \
+            contextlib.redirect_stdout(io.StringIO()) as output:
+        c.mem0_settings()
+        curl_calls = curl.call_count
+    mem0 = json.loads(target.read_text())
+    assert mem0['inference_api_url'] == 'http://inference.example/api/v1/chat/completions'
+    assert mem0['embedding_api_url'] == 'https://new.example/api/v1/embedding'
+    assert 'http://inference.example/api/v1/chat/completions' in output.getvalue()
+    assert 'http://embedding.example/api/v1/embedding' in output.getvalue()
+    assert output.getvalue().count('기존값을 그대로 사용하시겠습니까?') == 2
+    assert curl_calls == 2
+    assert '입력하신 경로가 정상작동하였습니다. 해당 값으로 확정합니다' in output.getvalue()
 
 with patch.object(c.shutil, 'which', return_value='/kubectl'), \
         patch.object(c.subprocess, 'run') as run, contextlib.redirect_stdout(io.StringIO()):

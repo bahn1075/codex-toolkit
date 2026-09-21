@@ -185,15 +185,8 @@ tail -f ~/.codex/toolkit/mem0-sessions/manual-import-errors.*
 
 ## Headroom 모드
 
-기본 `proxy` 모드는 `127.0.0.1:18787`의 상주 프록시를 사용합니다. 프록시를 쓰지
-않으려면 MCP 전용 모드로 전환합니다.
-
-```bash
-CT_HEADROOM_MODE=mcp bash ~/.codex/toolkit/bundle/setup.sh --resume
-```
-
-다시 상주 프록시로 전환하려면 `mcp`를 `proxy`로 바꿔 같은 명령을 실행합니다.
-프록시 구성에 실패하면 Codex 직접 연결을 복구하고 설치를 부분 실패로 표시합니다.
+Headroom은 MCP 도구로만 사용합니다. `setup.sh`와 `setup.sh --resume`은 기존
+Headroom 상주 프록시와 Codex provider 리디렉션을 제거해 OpenAI 직접 연결을 유지합니다.
 
 ## 알아둘 점
 

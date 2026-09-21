@@ -27,7 +27,7 @@ Default: archive ~/.codex, reinstall Codex, install/configure toolkit tools and 
 --resume: continue/reconcile without resetting config, login or history.
 Close Codex, Codex app and VS Code before running. Do not run with sudo.
 Optional environment settings (first installation):
-  CT_HEADROOM_MODE=proxy|mcp       default: proxy (persistent native runtime)
+  CT_HEADROOM_MODE=mcp             Headroom is available only as an MCP tool
   CT_AUTH=chatgpt                 this bundle uses manual ChatGPT login
 Mem0 uses Oracle AI Vector Search and user-specified inference/embedding APIs. Setup prompts
 for the Oracle wallet, database username/password, TNS alias, wallet password and model API URLs;
@@ -125,11 +125,8 @@ bootstrap() {
   export UV_TOOL_DIR="$CT_ROOT/uv-tools"
   export UV_TOOL_BIN_DIR="$CT_ROOT/bin"
   export PATH="$(dirname "$CT_NODE"):$CT_ROOT/bin:$CT_ROOT/npm/node_modules/.bin:$CT_PREFIX/bin:$PATH"
-  if [ -f "$CT_ROOT/install-state.json" ]; then
-    [ -n "$CT_HEADROOM_MODE" ] || CT_HEADROOM_MODE=$("$CT_PY" "$SCRIPT_DIR/configure.py" state-get headroom_mode)
-  fi
-  CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-proxy}
-  case "$CT_HEADROOM_MODE" in proxy|mcp) ;; *) die 'CT_HEADROOM_MODE must be proxy or mcp.' ;; esac
+  CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-mcp}
+  [ "$CT_HEADROOM_MODE" = mcp ] || die 'CT_HEADROOM_MODE must be mcp.'
   export CT_HEADROOM_MODE CT_PREFIX CT_UV CT_NPM CT_NODE
   "$CT_PY" "$SCRIPT_DIR/configure.py" state-init
 }
@@ -215,35 +212,11 @@ install_mem0() {
 }
 configure_headroom() {
   CT_STAGE=headroom
-  if [ "$CT_HEADROOM_MODE" = mcp ]; then
-    if [ -f "$HOME/.headroom/deploy/codex-toolkit/manifest.json" ]; then
-      "$CT_ROOT/bin/headroom" install remove --profile codex-toolkit
-    fi
-    "$CT_PY" "$SCRIPT_DIR/configure.py" status headroom_runtime mcp-only
-    return
-  fi
-  note 'Installing Headroom persistent native runtime for Codex only.'
-  cp "$CT_HOME/config.toml" "$CT_ROOT/logs/config-before-headroom.toml"
-  # Recreate only our deployment so upgraded Python code replaces old processes.
+  "$CT_PY" "$SCRIPT_DIR/configure.py" direct-provider
   if [ -f "$HOME/.headroom/deploy/codex-toolkit/manifest.json" ]; then
     "$CT_ROOT/bin/headroom" install remove --profile codex-toolkit
   fi
-  # The native planner selects launchd/cron where supported. No Docker dependency.
-  # The default proxy exposes Responses routes too; no model/provider key is selected here.
-  if "$CT_ROOT/bin/headroom" deploy --no-docker --profile codex-toolkit \
-      --scope provider --providers manual --target codex --port 18787 \
-      --no-telemetry && "$CT_PY" "$SCRIPT_DIR/configure.py" verify-proxy; then
-    "$CT_PY" "$SCRIPT_DIR/configure.py" status headroom_runtime configured
-  else
-    # Never leave Codex pointed at a failed local proxy.
-    if [ -f "$HOME/.headroom/deploy/codex-toolkit/manifest.json" ]; then
-      "$CT_ROOT/bin/headroom" install remove --profile codex-toolkit || true
-    fi
-    cp "$CT_ROOT/logs/config-before-headroom.toml" "$CT_HOME/config.toml"
-    "$CT_PY" "$SCRIPT_DIR/configure.py" direct-provider
-    "$CT_PY" "$SCRIPT_DIR/configure.py" status headroom_runtime failed-mcp-available
-    CT_FAILURES=$((CT_FAILURES + 1))
-  fi
+  "$CT_PY" "$SCRIPT_DIR/configure.py" status headroom_runtime mcp-only
 }
 install_plugins() {
   CT_STAGE=plugins
