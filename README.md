@@ -55,7 +55,7 @@ bash setup.sh
 
 설치 중 Mem0 연결에 필요한 Oracle wallet 디렉터리, DB 계정, TNS alias와 wallet
 비밀번호, 추론·임베딩 API URL을 입력합니다. 각 URL 프롬프트 전에
-`http://HOST/v1/chat/completions`, `http://HOST/v1/embedding` 예시가 표시됩니다.
+`http://HOST:1234/v1/chat/completions`, `http://HOST:1234/v1/embeddings` 예시가 표시됩니다.
 입력 URL은 권한 `600`인 `~/.codex/mem0.json`에만 저장됩니다.
 
 완료 후 새 터미널을 열고 다음 순서로 확인합니다.

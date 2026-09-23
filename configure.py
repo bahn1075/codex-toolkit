@@ -236,7 +236,7 @@ def configure():
     launcher('mem0-import-prompt', ['bash', str(BUNDLE / 'mem0_import/import_memories.sh')])
 
 
-def mem0_api_url(prompt, example, payload, existing=None):
+def mem0_api_url(prompt, example, payload, existing=None, response_kind=None):
     """Collect an HTTP(S) model API URL without probing an authenticated service."""
     print(f'Example: {example}')
     curl = shutil.which('curl')
@@ -259,6 +259,14 @@ def mem0_api_url(prompt, example, payload, existing=None):
             print('해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.')
             retrying = True
             continue
+        if response_kind == 'embedding':
+            path_parts = [part for part in parsed.path.rstrip('/').split('/') if part]
+            if (not path_parts or path_parts[-1] not in ('embedding', 'embeddings')
+                    or (len(path_parts) >= 2 and path_parts[-2] == 'chat')):
+                print(f'{prompt} must use an OpenAI-compatible /embedding(s) endpoint.')
+                print('해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.')
+                retrying = True
+                continue
         print('안내: API URL을 검증합니다. (curl로 단순 테스트 수행)')
         print('Test가 진행중입니다')
         try:
@@ -279,6 +287,18 @@ def mem0_api_url(prompt, example, payload, existing=None):
             print('해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.')
             retrying = True
             continue
+        if response_kind == 'embedding':
+            try:
+                response = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                response = None
+            if (not isinstance(response, dict) or not isinstance(response.get('data'), list)
+                    or not response['data'] or not isinstance(response['data'][0], dict)
+                    or not isinstance(response['data'][0].get('embedding'), list)):
+                print(f'{prompt} validation failed: response is not an embeddings result')
+                print('해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.')
+                retrying = True
+                continue
         print('입력하신 경로가 정상작동하였습니다. 해당 값으로 확정합니다')
         return value
 
@@ -291,21 +311,22 @@ def mem0_settings():
             data['wallet_password'] = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
         if 'inference_api_url' not in data:
             data['inference_api_url'] = mem0_api_url(
-                'Mem0 inference API URL', 'http://HOST/v1/chat/completions',
+                'Mem0 inference API URL', 'http://HOST:1234/v1/chat/completions',
                 {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1})
         else:
             data['inference_api_url'] = mem0_api_url(
-                'Mem0 inference API URL', 'http://HOST/v1/chat/completions',
+                'Mem0 inference API URL', 'http://HOST:1234/v1/chat/completions',
                 {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1},
                 data['inference_api_url'])
         if 'embedding_api_url' not in data:
             data['embedding_api_url'] = mem0_api_url(
-                'Mem0 embedding API URL', 'http://HOST/v1/embedding',
-                {'model': 'text-embedding-bge-m3', 'input': 'ping'})
+                'Mem0 embedding API URL', 'http://HOST:1234/v1/embeddings',
+                {'model': 'text-embedding-bge-m3', 'input': 'ping'}, response_kind='embedding')
         else:
             data['embedding_api_url'] = mem0_api_url(
-                'Mem0 embedding API URL', 'http://HOST/v1/embedding',
-                {'model': 'text-embedding-bge-m3', 'input': 'ping'}, data['embedding_api_url'])
+                'Mem0 embedding API URL', 'http://HOST:1234/v1/embeddings',
+                {'model': 'text-embedding-bge-m3', 'input': 'ping'}, data['embedding_api_url'],
+                response_kind='embedding')
         write(MEM0_CONFIG, json.dumps(data, indent=2) + '\n')
         return
     wallet = pathlib.Path(input('Oracle wallet directory: ').strip()).expanduser()
@@ -316,11 +337,11 @@ def mem0_settings():
     alias = input('Oracle TNS alias: ').strip()
     wallet_password = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
     inference_api_url = mem0_api_url(
-        'Mem0 inference API URL', 'http://HOST/v1/chat/completions',
+        'Mem0 inference API URL', 'http://HOST:1234/v1/chat/completions',
         {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1})
     embedding_api_url = mem0_api_url(
-        'Mem0 embedding API URL', 'http://HOST/v1/embedding',
-        {'model': 'text-embedding-bge-m3', 'input': 'ping'})
+        'Mem0 embedding API URL', 'http://HOST:1234/v1/embeddings',
+        {'model': 'text-embedding-bge-m3', 'input': 'ping'}, response_kind='embedding')
     if not username or not password or not re.fullmatch(r'[A-Za-z0-9_.-]+', alias):
         raise RuntimeError('Username, password and a simple TNS alias are required.')
     if not re.search(rf'(?mi)^\s*{re.escape(alias)}\s*=', (wallet / 'tnsnames.ora').read_text()):

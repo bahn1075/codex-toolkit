@@ -252,7 +252,8 @@ with tempfile.TemporaryDirectory() as tmp:
                 'http://inference.example/api/v1/chat/completions',
                 'http://embedding.example/api/v1/embedding']), \
             patch.object(c, 'getpass', side_effect=['secret', 'wallet-secret']), \
-            patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{}', '')) as curl:
+            patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                [], 0, '{"data":[{"embedding":[0.1]}]}', '')) as curl:
         c.mem0_settings()
         curl_calls = curl.call_count
     mem0 = json.loads(target.read_text())
@@ -271,16 +272,17 @@ with tempfile.TemporaryDirectory() as tmp:
         'embedding_api_url': 'http://embedding.example/api/v1/embedding',
     }))
     with patch.object(c, 'MEM0_CONFIG', target), \
-            patch('builtins.input', side_effect=['', 'https://new.example/api/v1/embedding']), \
-            patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '{}', '')) as curl, \
+            patch('builtins.input', side_effect=['', 'https://new.example/api/v1/embeddings']), \
+            patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                [], 0, '{"data":[{"embedding":[0.1]}]}', '')) as curl, \
             contextlib.redirect_stdout(io.StringIO()) as output:
         c.mem0_settings()
         curl_calls = curl.call_count
     mem0 = json.loads(target.read_text())
     assert mem0['inference_api_url'] == 'http://inference.example/api/v1/chat/completions'
-    assert mem0['embedding_api_url'] == 'https://new.example/api/v1/embedding'
-    assert 'http://HOST/v1/chat/completions' in output.getvalue()
-    assert 'http://HOST/v1/embedding' in output.getvalue()
+    assert mem0['embedding_api_url'] == 'https://new.example/api/v1/embeddings'
+    assert 'http://HOST:1234/v1/chat/completions' in output.getvalue()
+    assert 'http://HOST:1234/v1/embeddings' in output.getvalue()
     assert output.getvalue().count('기존값을 그대로 사용하시겠습니까?') == 2
     assert curl_calls == 2
     assert '입력하신 경로가 정상작동하였습니다. 해당 값으로 확정합니다' in output.getvalue()
@@ -296,12 +298,32 @@ with tempfile.TemporaryDirectory() as tmp:
     succeeded = subprocess.CompletedProcess([], 0, '{}', '')
     with patch.object(c, 'MEM0_CONFIG', target), \
             patch('builtins.input', side_effect=['', 'https://working.example/v1/chat/completions', '']), \
-            patch.object(c.subprocess, 'run', side_effect=[failed, succeeded, succeeded]), \
+            patch.object(c.subprocess, 'run', side_effect=[
+                failed, succeeded,
+                subprocess.CompletedProcess([], 0, '{"data":[{"embedding":[0.1]}]}', '')]), \
             contextlib.redirect_stdout(io.StringIO()) as output:
         c.mem0_settings()
     mem0 = json.loads(target.read_text())
     assert mem0['inference_api_url'] == 'https://working.example/v1/chat/completions'
     assert '해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.' in output.getvalue()
+
+with tempfile.TemporaryDirectory() as tmp:
+    target = Path(tmp) / 'mem0.json'
+    target.write_text(json.dumps({
+        'wallet_password': '',
+        'inference_api_url': 'http://inference.example/v1/chat/completions',
+        'embedding_api_url': 'http://embedding.example/v1/chat/embedding',
+    }))
+    with patch.object(c, 'MEM0_CONFIG', target), \
+            patch('builtins.input', side_effect=[
+                '', 'http://embedding.example/v1/chat/embedding',
+                'http://embedding.example/v1/embeddings']), \
+            patch.object(c.subprocess, 'run', side_effect=[
+                subprocess.CompletedProcess([], 0, '{}', ''),
+                subprocess.CompletedProcess([], 0, '{"data":[{"embedding":[0.1]}]}', '')]):
+        c.mem0_settings()
+    mem0 = json.loads(target.read_text())
+    assert mem0['embedding_api_url'] == 'http://embedding.example/v1/embeddings'
 
 for plugin_exit in (0, 1):
     result = subprocess.run(['bash', '-c', '''
