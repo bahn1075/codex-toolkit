@@ -13,11 +13,6 @@ represent the requested operation. Briefly state the concrete reason for a
 fallback. Do not bypass authentication, permissions, denied actions or the
 user's resource scope by switching transports.
 
-For Kubernetes/OpenShift, use Kubernetes MCP, including for namespaces, pods,
-logs and resources. Use bash kubectl/oc only under the fallback conditions above.
-Keep the intended kubeconfig context and namespace explicit. Never change to a
-different cluster just because the current context returns an error.
-
 ## Code projects
 
 Before semantic code work, activate the actual current workspace's absolute
@@ -36,13 +31,6 @@ directory set to the actual repository. Run `graft build` yourself when needed.
 Do not ask the user to run an activation command. Use the structural, keyless
 build by default. Do not run `graft init` or a paid `--deep` build implicitly.
 
-## Documentation
-
-Use Context7 for library/API documentation, configuration and version-specific
-examples when relevant, without requiring the phrase "use context7". Match the
-actual dependency version. Use authoritative documentation if Context7 has no
-coverage or is unavailable.
-
 ## Memory
 
 When continuity matters, search Mem0 before repeating prior investigation.
@@ -54,11 +42,11 @@ Do not store secrets in notes. Respect explicit user requests not to retain data
 
 ## Headroom
 
-When the configured Headroom proxy is healthy, it handles compression in the
-request path. Use its MCP compression/retrieval tools only where useful; use
-retrieval for exact originals when required. Merely registering its MCP does
-not intercept other tools' results, and passing an already-read giant result
-to a compression tool does not recover the input tokens already spent.
+Headroom runs as an MCP-only tool server in token mode with the balanced
+profile. Use its compression/retrieval tools where useful; use retrieval for
+exact originals when required. Registering it does not intercept other tools'
+results, and passing an already-read giant result to a compression tool does
+not recover the input tokens already spent.
 Do not infer a token saving percentage from installation alone.
 
 ## Instruction boundary

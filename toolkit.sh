@@ -144,12 +144,6 @@ snapshot_configuration() {
 install_packages() {
   CT_STAGE=packages
   install_codex
-  note 'Installing/updating Kubernetes MCP through Homebrew.'
-  if "$CT_BREW" list --formula kubernetes-mcp-server >/dev/null 2>&1; then
-    "$CT_BREW" upgrade --formula kubernetes-mcp-server
-  else
-    "$CT_BREW" install --formula kubernetes-mcp-server
-  fi
   # Official Python packages; isolated from the user's other uv tools.
   "$CT_UV" tool install --upgrade --python "$CT_BOOT_PY" serena-agent
   "$CT_UV" tool install --upgrade --python "$CT_BOOT_PY" 'headroom-ai[all]'
@@ -164,9 +158,10 @@ install_packages() {
     CT_NPM_PY=/usr/bin/python3
   fi
   "$CT_NPM" uninstall --prefix "$CT_ROOT/npm" claude-mem >/dev/null 2>&1 || true
+  "$CT_NPM" uninstall --prefix "$CT_ROOT/npm" @upstash/context7-mcp >/dev/null 2>&1 || true
   "$CT_PY" "$SCRIPT_DIR/configure.py" npm-policy
   PYTHON="$CT_NPM_PY" "$CT_NPM" install --prefix "$CT_ROOT/npm" --save-exact --ignore-scripts=false --foreground-scripts \
-    @nanonets/graft@latest @upstash/context7-mcp@latest
+    @nanonets/graft@latest
   # Also repair unchanged packages skipped by an earlier npm install or built with another Node.
   PYTHON="$CT_NPM_PY" "$CT_NPM" rebuild --prefix "$CT_ROOT/npm" --ignore-scripts=false --foreground-scripts
   ct_repo="$CT_ROOT/repos/ponytail"
@@ -233,7 +228,10 @@ finish() {
   CT_STAGE=verification
   "$CT_PY" "$SCRIPT_DIR/configure.py" validate
   "$CT_PY" "$SCRIPT_DIR/configure.py" verify-graft
-  note 'Install/configuration pass finished. Authentication and runtime checks are separate.'
+  "$CT_PY" "$SCRIPT_DIR/configure.py" doctor
+  "$CT_PY" "$SCRIPT_DIR/configure.py" final-status
+  "$CT_CODEX" mcp list
+  note 'Install/configuration pass finished. The MCP status above is the final setup check.'
   printf '%s\n' \
     'Open a new terminal (or restart VS Code), then run: codex login' \
     'Run codex and start a new thread; Mem0 is available through /mcp.' \

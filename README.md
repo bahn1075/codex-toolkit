@@ -8,7 +8,7 @@ macOS와 Linux에서 Codex CLI·VS Code 확장과 개발용 MCP를 한 번에 �
 | 구분 | 구성 요소 |
 |---|---|
 | Codex | 공식 native Codex CLI, VS Code `openai.chatgpt` 확장 |
-| MCP | Serena, Graft, Kubernetes MCP, Context7, Headroom, Mem0 |
+| MCP | Serena, Graft, Headroom, Mem0 |
 | 지침·플러그인 | Ponytail 지침, Superpowers 플러그인 |
 | 편의 명령 | `codex-update`, `codex-doctor`, `mem0-import` |
 
@@ -42,8 +42,8 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 1. 운영체제, 필수 명령, Node.js 버전과 실행 중인 Codex 프로세스를 검사합니다.
 2. 공식 native installer로 Codex를 설치하거나 업데이트하고(기존 Homebrew Codex formula/cask는 제거), MCP 의존성과 등록된 Serena 프로젝트의 언어 서버를 다시 맞춥니다.
 3. `~/.codex/config.toml`, 전역 `AGENTS.md`, shell alias를 구성합니다.
-4. Mem0 연결 정보와 hook, Headroom 실행 모드, Superpowers를 구성합니다.
-5. 설정 유효성과 Graft MCP의 실제 시작·도구 목록을 검사합니다.
+4. Mem0 연결 정보와 hook, Headroom의 token/balanced MCP 모드, Superpowers를 구성합니다.
+5. 설정 유효성과 모든 활성 MCP의 실제 시작·도구 목록 및 최종 상태를 검사합니다.
 
 Codex native CLI는 기본적으로 `~/.local/bin/codex`에 설치됩니다.
 
@@ -55,7 +55,7 @@ bash setup.sh
 
 설치 중 Mem0 연결에 필요한 Oracle wallet 디렉터리, DB 계정, TNS alias와 wallet
 비밀번호, 추론·임베딩 API URL을 입력합니다. 각 URL 프롬프트 전에
-`http://HOST/api/v1/chat/completions`, `http://HOST/api/v1/embedding` 예시가 표시됩니다.
+`http://HOST/v1/chat/completions`, `http://HOST/v1/embedding` 예시가 표시됩니다.
 입력 URL은 권한 `600`인 `~/.codex/mem0.json`에만 저장됩니다.
 
 완료 후 새 터미널을 열고 다음 순서로 확인합니다.
@@ -95,7 +95,7 @@ codex plugin add superpowers@openai-curated-remote
 - 최초 설치가 오류나 강제 종료로 중단된 경우
 - `Partial setup`이 표시된 경우
 - Mem0 입력을 완료하지 못했거나 hook/MCP 등록을 다시 적용해야 하는 경우
-- Node, npm, uv, kubeconfig 등 실행 환경의 경로가 바뀐 경우
+- Node, npm, uv 등 실행 환경의 경로가 바뀐 경우
 - Headroom 모드를 바꾸거나 Graft 설정을 복구한 경우
 
 ```bash
@@ -187,19 +187,16 @@ tail -f ~/.codex/toolkit/mem0-sessions/manual-import-errors.*
 ## Headroom 모드
 
 Headroom은 MCP 도구로만 사용합니다. `setup.sh`와 `setup.sh --resume`은 기존
-Headroom 상주 프록시와 Codex provider 리디렉션을 제거해 OpenAI 직접 연결을 유지합니다.
+Headroom 상주 프록시와 Codex provider 리디렉션을 제거해 OpenAI 직접 연결을 유지하고,
+MCP 서버에는 `HEADROOM_MODE=token`과 `HEADROOM_SAVINGS_PROFILE=balanced`를 설정합니다.
+설치 마지막 단계는 활성 MCP의 handshake 및 `codex mcp list`를 실행한 뒤 최종 상태를 출력합니다.
 
 ## 알아둘 점
 
 - Graft는 Git 저장소에서만 구조 인덱스를 자동 준비합니다. 별도의 `graft init`이나
   `graft build`는 필요하지 않습니다.
-- Kubernetes MCP는 기존 kubeconfig와 `current-context`를 사용하며 클러스터를 자동으로
-  만들거나 바꾸지 않습니다.
-- Context7 API 키가 필요하면 설치 또는 `--resume` 실행 시 `CONTEXT7_API_KEY`를
-  환경 변수로 전달하세요.
 - `codex-doctor`는 stdio MCP의 초기화와 도구 목록을 검사합니다. 플러그인과 hook은
-  `/mcp`, `/hooks`에서 별도로 확인해야 하며 실제 모델 추론이나 클러스터 권한까지
-  보장하지는 않습니다.
+  `/mcp`, `/hooks`에서 별도로 확인해야 하며 실제 모델 추론까지 보장하지는 않습니다.
 - Remote SSH나 컨테이너에서는 Codex가 실행되는 원격 환경에도 이 툴킷을 설치해야 합니다.
 
 ## 개발 검증

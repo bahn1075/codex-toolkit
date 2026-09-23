@@ -150,7 +150,6 @@ def configure():
     state['uv'] = os.environ['CT_UV']
     state['npm'] = os.environ['CT_NPM']
     graft = npm_binary('@nanonets/graft', 'graft')
-    c7 = npm_binary('@upstash/context7-mcp', 'context7-mcp')
     graft_launch = launcher('graft-mcp',
         [sys.executable, str(BUNDLE / 'graft_mcp.py'), state['node'], graft])
     state['graft_binary'] = graft
@@ -169,12 +168,13 @@ def configure():
     table(table(doc, 'shell_environment_policy'), 'set')['PATH'] = state['path']
     normalize_computer_use_path(doc)
     servers = table(doc, 'mcp_servers')
+    # These were managed by older toolkit releases; no longer retain them in Codex.
+    servers.pop('kubernetes', None)
+    servers.pop('context7', None)
     specs = {
         'serena': (str(ROOT / 'bin/serena'), ['start-mcp-server', '--context=codex',
             '--enable-web-dashboard=false', '--open-web-dashboard=false']),
         'graft': (graft_launch, []),
-        'kubernetes': (os.environ['CT_PREFIX'] + '/bin/kubernetes-mcp-server', []),
-        'context7': (state['node'], [c7]),
         'headroom': (str(ROOT / 'bin/headroom'), ['mcp', 'serve']),
         'mem0': (launcher('mem0-mcp', [sys.executable, str(BUNDLE / 'mem0_mcp.py')]), []),
     }
@@ -192,14 +192,9 @@ def configure():
         env['PATH'] = state['path']
         if name == 'graft':
             env['CODEX_GRAFT_BUILD_TIMEOUT'] = str(min(90, max(.1, float(entry['startup_timeout_sec']) - 10)))
-        if name == 'kubernetes':
-            # Persist only explicitly configured kubeconfig file paths, never its contents.
-            if os.environ.get('KUBECONFIG'):
-                env['KUBECONFIG'] = os.pathsep.join(str(pathlib.Path(p).expanduser().absolute())
-                    for p in os.environ['KUBECONFIG'].split(os.pathsep) if p)
-            entry['env_vars'] = list(dict.fromkeys(list(entry.get('env_vars', [])) + ['KUBECONFIG']))
-        if name == 'context7' and os.environ.get('CONTEXT7_API_KEY'):
-            env['CONTEXT7_API_KEY'] = os.environ['CONTEXT7_API_KEY']
+        if name == 'headroom':
+            env['HEADROOM_MODE'] = 'token'
+            env['HEADROOM_SAVINGS_PROFILE'] = 'balanced'
     save_config(doc)
     state['graft_auto_start'] = True
     save_state(state)
@@ -296,20 +291,20 @@ def mem0_settings():
             data['wallet_password'] = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
         if 'inference_api_url' not in data:
             data['inference_api_url'] = mem0_api_url(
-                'Mem0 inference API URL', 'http://HOST/api/v1/chat/completions',
+                'Mem0 inference API URL', 'http://HOST/v1/chat/completions',
                 {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1})
         else:
             data['inference_api_url'] = mem0_api_url(
-                'Mem0 inference API URL', 'http://HOST/api/v1/chat/completions',
+                'Mem0 inference API URL', 'http://HOST/v1/chat/completions',
                 {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1},
                 data['inference_api_url'])
         if 'embedding_api_url' not in data:
             data['embedding_api_url'] = mem0_api_url(
-                'Mem0 embedding API URL', 'http://HOST/api/v1/embedding',
+                'Mem0 embedding API URL', 'http://HOST/v1/embedding',
                 {'model': 'text-embedding-bge-m3', 'input': 'ping'})
         else:
             data['embedding_api_url'] = mem0_api_url(
-                'Mem0 embedding API URL', 'http://HOST/api/v1/embedding',
+                'Mem0 embedding API URL', 'http://HOST/v1/embedding',
                 {'model': 'text-embedding-bge-m3', 'input': 'ping'}, data['embedding_api_url'])
         write(MEM0_CONFIG, json.dumps(data, indent=2) + '\n')
         return
@@ -321,10 +316,10 @@ def mem0_settings():
     alias = input('Oracle TNS alias: ').strip()
     wallet_password = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
     inference_api_url = mem0_api_url(
-        'Mem0 inference API URL', 'http://HOST/api/v1/chat/completions',
+        'Mem0 inference API URL', 'http://HOST/v1/chat/completions',
         {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1})
     embedding_api_url = mem0_api_url(
-        'Mem0 embedding API URL', 'http://HOST/api/v1/embedding',
+        'Mem0 embedding API URL', 'http://HOST/v1/embedding',
         {'model': 'text-embedding-bge-m3', 'input': 'ping'})
     if not username or not password or not re.fullmatch(r'[A-Za-z0-9_.-]+', alias):
         raise RuntimeError('Username, password and a simple TNS alias are required.')
@@ -415,54 +410,40 @@ def direct_provider():
     save_config(doc)
 
 
-def kubernetes_preflight(entry):
-    """Read local kubeconfig only; never select a context or contact a cluster."""
-    if entry.get('args'):
-        print('SKIP Kubernetes preflight: custom server arguments; doctor checks server startup.')
-        return True
-    env = os.environ.copy()
-    env.update(entry.get('env', {}))
-    kubectl = shutil.which('kubectl', path=env.get('PATH'))
-    if not kubectl:
-        print('SKIP Kubernetes preflight: kubectl unavailable; doctor checks server startup.')
-        return True
-    try:
-        result = subprocess.run([kubectl, 'config', 'view', '-o', 'json'],
-            env=env, capture_output=True, text=True, timeout=10)
-        if result.returncode:
-            raise ValueError('unable to read kubeconfig')
-        doc = json.loads(result.stdout)
-        contexts = [item['name'] for item in doc.get('contexts', [])]
-        current = doc.get('current-context')
-        if not current or current not in contexts:
-            print('PENDING Kubernetes: select a valid current-context in the MCP kubeconfig.')
-            print('Available contexts: ' + ', '.join(contexts))
-            print('Use kubectl config use-context <chosen-context> with the same KUBECONFIG.')
-            return False
-        print(f'PASS Kubernetes local context: {current} (cluster access not tested).')
-        return True
-    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
-        print('PENDING Kubernetes: cannot inspect local kubeconfig; check its path and syntax.')
-        return False
-
-
 def validate():
     state, doc = read_state(), config()
-    for name in ['serena', 'graft', 'kubernetes', 'context7', 'headroom', 'mem0']:
+    managed = ['serena', 'graft', 'headroom', 'mem0']
+    excluded = {'kubernetes', 'context7'}
+    if excluded & set(doc.get('mcp_servers', {})):
+        raise RuntimeError('Excluded MCP servers remain configured.')
+    for name in managed:
         entry = doc['mcp_servers'][name]
         if not os.path.isabs(entry['command']) or not os.access(entry['command'], os.X_OK):
             raise RuntimeError(f'Missing executable for {name}')
+    headroom = doc['mcp_servers']['headroom']
+    if headroom.get('env', {}).get('HEADROOM_MODE') != 'token' or \
+            headroom.get('env', {}).get('HEADROOM_SAVINGS_PROFILE') != 'balanced':
+        raise RuntimeError('Headroom token mode must use the balanced profile.')
     if (CODEX / 'AGENTS.md').stat().st_size > int(doc.get('project_doc_max_bytes', 32768)):
         raise RuntimeError('Global AGENTS.md exceeds instruction byte budget.')
     print('PASS: TOML, managed MCP executable paths, global instruction size.')
-    kube = doc['mcp_servers']['kubernetes']
-    if kube.get('enabled', True):
-        kubernetes_preflight(kube)
     for key in ['mem0_install', 'headroom_runtime']:
         print(f'{key}: {state.get(key, "not completed")}')
     if not MEM0_CONFIG.exists():
         print('PENDING: Mem0 Oracle connection has not been configured.')
     print('NOT CHECKED here: Codex login, actual inference, Mem0 writes/searches and IDE behavior.')
+
+
+def final_status():
+    """Print the MCP configuration that setup has just validated."""
+    if read_state().get('headroom_runtime') != 'mcp-only':
+        raise RuntimeError('Headroom is not configured for MCP-only operation.')
+    doc = config()
+    for name in ['serena', 'graft', 'headroom', 'mem0']:
+        enabled = doc['mcp_servers'][name].get('enabled', True)
+        print(f"MCP {name}: {'enabled' if enabled else 'disabled'}")
+    print('Headroom: MCP-only, token mode, balanced profile.')
+    print('Excluded MCPs: kubernetes, context7.')
 
 
 def mcp_probe(name, entry, workdir, stderr=subprocess.DEVNULL):
@@ -553,9 +534,6 @@ def doctor():
     for name, entry in config().get('mcp_servers', {}).items():
         if not entry.get('command') or not entry.get('enabled', True):
             continue
-        if name == 'kubernetes' and not kubernetes_preflight(entry):
-            failures += 1
-            continue
         print(f'Checking {name}...', flush=True)
         try:
             mcp_probe(name, entry, os.getcwd())
@@ -587,7 +565,7 @@ def main():
         state['updated_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
         state['ponytail_commit'] = subprocess.check_output(['git', '-C', str(ROOT / 'repos/ponytail'), 'rev-parse', 'HEAD'], text=True).strip()
         state['npm_versions'] = {p: json.loads((ROOT / 'npm/node_modules' / p / 'package.json').read_text())['version']
-            for p in ['@nanonets/graft', '@upstash/context7-mcp']}
+            for p in ['@nanonets/graft']}
         save_state(state)
     elif cmd == 'status':
         state = read_state(); state[args[0]] = args[1]; save_state(state)
@@ -600,6 +578,7 @@ def main():
     elif cmd == 'verify-proxy': verify_proxy()
     elif cmd == 'direct-provider': direct_provider()
     elif cmd == 'validate': validate()
+    elif cmd == 'final-status': final_status()
     elif cmd == 'doctor': return doctor()
     else: raise RuntimeError(f'Unknown command {cmd}')
     return 0

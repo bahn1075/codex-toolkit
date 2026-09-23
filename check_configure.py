@@ -55,7 +55,9 @@ def check_configure(existing, state=None):
         except Saved:
             pass
     restored = tomlkit.parse(tomlkit.dumps(doc))
-    assert restored['mcp_servers']['context7']['command'] == '/selected/node'
+    assert set(restored['mcp_servers']) == {'serena', 'graft', 'headroom', 'mem0'}
+    assert restored['mcp_servers']['headroom']['env']['HEADROOM_MODE'] == 'token'
+    assert restored['mcp_servers']['headroom']['env']['HEADROOM_SAVINGS_PROFILE'] == 'balanced'
     assert restored['tui']['status_line_use_colors'] is True
     assert restored['mcp_servers']['graft']['env']['PATH'].split(c.os.pathsep)[0] == '/selected'
     assert restored['features']['hooks'] is True
@@ -76,7 +78,20 @@ assert doc['mcp_servers']['graft']['tool_timeout_sec'] == 42
 assert check_configure('[mcp_servers.graft]\nenabled = false\n')['mcp_servers']['graft']['enabled'] is True
 assert check_configure('[mcp_servers.graft]\nenabled = false\n',
     {'graft_auto_start': True})['mcp_servers']['graft']['enabled'] is False
+legacy_doc = check_configure('''[mcp_servers.kubernetes]
+command = "/legacy/kubernetes"
+
+[mcp_servers.context7]
+command = "/legacy/context7"
+''')
+assert 'kubernetes' not in legacy_doc['mcp_servers']
+assert 'context7' not in legacy_doc['mcp_servers']
+
 assert doc['mcp_servers']['mem0']['enabled'] is True
+assert set(doc['mcp_servers']) == {'serena', 'graft', 'headroom', 'mem0'}
+assert doc['mcp_servers']['headroom']['enabled'] is True
+assert doc['mcp_servers']['headroom']['env']['HEADROOM_MODE'] == 'token'
+assert doc['mcp_servers']['headroom']['env']['HEADROOM_SAVINGS_PROFILE'] == 'balanced'
 assert doc['tui']['status_line'] == [
     'model-with-reasoning', 'current-dir', 'thread-name', 'run-state',
     'five-hour-limit', 'weekly-limit', 'used-tokens',
@@ -109,10 +124,95 @@ assert 'model_provider' not in headroom_doc
 assert 'openai_base_url' not in headroom_doc
 assert 'headroom' not in headroom_doc['model_providers']
 assert headroom_doc['model_providers']['other']['name'] == 'Other provider'
+
+status_doc = tomlkit.parse('''[mcp_servers.serena]
+command = "/tools/serena"
+
+[mcp_servers.graft]
+command = "/tools/graft"
+enabled = false
+
+[mcp_servers.headroom]
+command = "/tools/headroom"
+
+[mcp_servers.headroom.env]
+HEADROOM_MODE = "token"
+HEADROOM_SAVINGS_PROFILE = "balanced"
+
+[mcp_servers.mem0]
+command = "/tools/mem0"
+''')
+with patch.object(c, 'config', return_value=status_doc), \
+        patch.object(c, 'read_state', return_value={'headroom_runtime': 'mcp-only'}), \
+        contextlib.redirect_stdout(io.StringIO()) as output:
+    c.final_status()
+assert output.getvalue().splitlines() == [
+    'MCP serena: enabled',
+    'MCP graft: disabled',
+    'MCP headroom: enabled',
+    'MCP mem0: enabled',
+    'Headroom: MCP-only, token mode, balanced profile.',
+    'Excluded MCPs: kubernetes, context7.',
+]
+with patch.object(c, 'config', return_value=status_doc), \
+        patch.object(c, 'read_state', return_value={'headroom_runtime': 'configured'}):
+    try:
+        c.final_status()
+    except RuntimeError as exc:
+        assert str(exc) == 'Headroom is not configured for MCP-only operation.'
+    else:
+        raise AssertionError('final status must reject a Headroom proxy configuration')
+
 toolkit = Path(__file__).with_name('toolkit.sh').read_text()
 assert 'CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-mcp}' in toolkit
 assert 'CT_HEADROOM_MODE must be mcp.' in toolkit
 assert "state['codex'] = os.environ['CT_CODEX']" in Path(__file__).with_name('configure.py').read_text()
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    toolkit_root = root / 'toolkit'
+    repo = toolkit_root / 'repos/ponytail'
+    (repo / '.git').mkdir(parents=True)
+    (repo / 'AGENTS.md').write_text('Ponytail test instructions\n')
+    serena = toolkit_root / 'bin/serena'
+    serena.parent.mkdir(parents=True)
+    serena.write_text('#!/usr/bin/env bash\nexit 0\n')
+    serena.chmod(0o755)
+    serena_python = toolkit_root / 'uv-tools/serena-agent/bin/python'
+    serena_python.parent.mkdir(parents=True)
+    serena_python.write_text('#!/usr/bin/env bash\nexit 0\n')
+    serena_python.chmod(0o755)
+    npm_log = root / 'npm.log'
+    result = subprocess.run(['bash', '-c', r'''
+set -Eeuo pipefail
+source "$1/toolkit.sh"
+mock_brew() { printf 'BREW %s\n' "$*"; }
+mock_uv() { printf 'UV %s\n' "$*"; }
+mock_npm() { printf 'NPM %s\n' "$*"; printf '%s\n' "$*" >> "$NPM_LOG"; }
+git() {
+  case "$*" in
+    *'status --porcelain'|*'pull --ff-only') : ;;
+    *'remote get-url origin') printf '%s\n' 'https://github.com/dietrichgebert/ponytail.git' ;;
+    *) : ;;
+  esac
+}
+install_codex() { :; }
+SCRIPT_DIR=$1
+CT_ROOT=$2
+CT_BREW=mock_brew
+CT_UV=mock_uv
+CT_NPM=mock_npm
+CT_PY=:
+CT_BOOT_PY=/python
+NPM_LOG=$3
+install_packages
+''', 'check', str(Path(__file__).resolve().parent), str(toolkit_root), str(npm_log)],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert '@nanonets/graft@latest' in result.stdout
+    assert 'kubernetes-mcp-server' not in result.stdout
+    assert '@upstash/context7-mcp@latest' not in result.stdout
+    assert '@upstash/context7-mcp' in npm_log.read_text()
 
 with tempfile.TemporaryDirectory() as tmp:
     home = Path(tmp) / 'home'
@@ -179,8 +279,8 @@ with tempfile.TemporaryDirectory() as tmp:
     mem0 = json.loads(target.read_text())
     assert mem0['inference_api_url'] == 'http://inference.example/api/v1/chat/completions'
     assert mem0['embedding_api_url'] == 'https://new.example/api/v1/embedding'
-    assert 'http://inference.example/api/v1/chat/completions' in output.getvalue()
-    assert 'http://embedding.example/api/v1/embedding' in output.getvalue()
+    assert 'http://HOST/v1/chat/completions' in output.getvalue()
+    assert 'http://HOST/v1/embedding' in output.getvalue()
     assert output.getvalue().count('기존값을 그대로 사용하시겠습니까?') == 2
     assert curl_calls == 2
     assert '입력하신 경로가 정상작동하였습니다. 해당 값으로 확정합니다' in output.getvalue()
@@ -202,22 +302,6 @@ with tempfile.TemporaryDirectory() as tmp:
     mem0 = json.loads(target.read_text())
     assert mem0['inference_api_url'] == 'https://working.example/v1/chat/completions'
     assert '해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.' in output.getvalue()
-
-with patch.object(c.shutil, 'which', return_value='/kubectl'), \
-        patch.object(c.subprocess, 'run') as run, contextlib.redirect_stdout(io.StringIO()):
-    for current, expected in [('', False), ('missing', False), ('chosen', True)]:
-        run.return_value = subprocess.CompletedProcess([], 0, json.dumps({
-            'current-context': current, 'contexts': [{'name': 'chosen'}, {'name': 'other'}]}))
-        assert c.kubernetes_preflight({'env': {'KUBECONFIG': '/chosen/config'}}) is expected
-        assert run.call_args.args[0] == ['/kubectl', 'config', 'view', '-o', 'json']
-        assert run.call_args.kwargs['env']['KUBECONFIG'] == '/chosen/config'
-    run.return_value = subprocess.CompletedProcess([], 1, '')
-    assert c.kubernetes_preflight({}) is False
-    run.side_effect = subprocess.TimeoutExpired('kubectl', 10)
-    assert c.kubernetes_preflight({}) is False
-    run.reset_mock()
-    assert c.kubernetes_preflight({'args': ['--config', '/custom']}) is True
-    run.assert_not_called()
 
 for plugin_exit in (0, 1):
     result = subprocess.run(['bash', '-c', '''
@@ -292,12 +376,14 @@ for failed in ('', 'verify-graft'):
 set -Eeuo pipefail
 source "$1/toolkit.sh"
 CT_PY=mock_python
+CT_CODEX=mock_codex
 SCRIPT_DIR=$1
 failed=$2
 mock_python() { [ "$2" != "$failed" ]; }
+mock_codex() { [ "$*" = 'mcp list' ]; }
 finish
 ''', 'check', str(Path(__file__).resolve().parent), failed], capture_output=True, text=True)
     assert (result.returncode == 0) == (not failed)
     assert ('Install/configuration pass finished' in result.stdout) == (not failed)
 
-print('PASS: configuration, Graft build policy/runtime probe/failure gate, Kubernetes preflight, Superpowers handling.')
+print('PASS: configuration, Graft build policy/runtime probe/failure gate, Superpowers handling.')
