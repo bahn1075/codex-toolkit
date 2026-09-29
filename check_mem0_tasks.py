@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import uuid
 
@@ -197,6 +198,33 @@ with patch.object(mem0_mcp, 'extract_facts', side_effect=lambda store, messages,
     assert '문제와 조치가 이어진다' in finish.call_args.args[1][0]['content']
 
 print('PASS: multiple outcomes per turn, strict status, bounded long-task inference.')
+
+def task_response(problem, actions, result):
+    payload = {'tasks': [{'problem': problem, 'actions': actions, 'result': result,
+                          'status': 'unresolved', 'continuation': False}]}
+    choice = SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+        content=json.dumps(payload, ensure_ascii=False), model_extra={}))
+    return SimpleNamespace(choices=[choice])
+
+store = MagicMock()
+create = store.llm.client.with_options.return_value.chat.completions.create
+create.side_effect = [task_response('网络访问异常', '检查了路由和代理', '原因未确认'),
+                      task_response('네트워크 접속 이상', '라우팅과 프록시를 점검했다', '원인을 확인하지 못했다')]
+records = mem0_mcp.extract_task_records(store, [{'role': 'user', 'content': '네트워크가 안 돼'}])
+assert create.call_count == 2
+assert '네트워크 접속 이상' in records[0]['text'] and '网络访问异常' not in records[0]['text']
+assert '한국어' in create.call_args.kwargs['messages'][0]['content']
+
+store = MagicMock()
+create = store.llm.client.with_options.return_value.chat.completions.create
+create.return_value = task_response('网络访问异常', '检查了路由和代理', '原因未确认')
+try:
+    mem0_mcp.extract_task_records(store, [{'role': 'user', 'content': '네트워크가 안 돼'}])
+    raise AssertionError('Chinese task descriptions must not be stored')
+except ValueError:
+    pass
+
+print('PASS: Chinese task output is retried in Korean and rejected if still untranslated.')
 
 secret = '{"password": "hunter2", "apiKey": "topsecret"}'
 assert 'hunter2' not in session_import.redact(secret)
