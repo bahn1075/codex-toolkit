@@ -48,6 +48,31 @@ def redact(text):
                   r'\1=[REDACTED]', text)
 
 
+def complete_end(path, include_valid_tail=False):
+    """Snapshot the byte offset after the last complete JSONL record."""
+    size = path.stat().st_size
+    end = size
+    with path.open('rb') as source:
+        while end:
+            start = max(0, end - 65536)
+            source.seek(start)
+            tail = source.read(end - start)
+            newline = tail.rfind(b'\n')
+            if newline >= 0:
+                complete = start + newline + 1
+                if include_valid_tail and complete < size:
+                    source.seek(complete)
+                    try:
+                        json.loads(source.read())
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        pass
+                    else:
+                        return size
+                return complete
+            end = start
+    return 0
+
+
 def enqueue(event):
     if event.get('hook_event_name') not in ('SessionStart', 'SessionEnd'):
         raise ValueError('Expected SessionStart or SessionEnd')
@@ -60,18 +85,8 @@ def enqueue(event):
         roots = (HOME / 'sessions', HOME / 'archived_sessions')
         if not any(path.is_relative_to(root.resolve()) for root in roots):
             raise ValueError('Transcript is outside Codex session directories')
-        end = path.stat().st_size
         # Only enqueue complete JSONL records; a later end event picks up a partial tail.
-        with path.open('rb') as source:
-            while end:
-                start = max(0, end - 65536)
-                source.seek(start)
-                tail = source.read(end - start)
-                newline = tail.rfind(b'\n')
-                if newline >= 0:
-                    end = start + newline + 1
-                    break
-                end = start
+        end = complete_end(path)
         if not end:
             raise ValueError('Transcript contains no complete records')
         job = STATE / f'{session}-{end:020d}.job.json'
@@ -167,7 +182,7 @@ def extract_task_memories(store, messages, previous=None):
                                 previous['text'] if previous else None)
 
 
-def batches(path, session, checkpoint, end):
+def batches(path, session, checkpoint, end, include_valid_tail=False):
     """Yield each completed Codex turn with its user request and observed work."""
     offset = checkpoint.get('offset', 0)
     digest = hashlib.sha256()
@@ -189,7 +204,8 @@ def batches(path, session, checkpoint, end):
         messages = []
         while transcript.tell() < end:
             raw = transcript.readline()
-            if not raw or not raw.endswith(b'\n') or transcript.tell() > end:
+            if not raw or transcript.tell() > end or (
+                    not raw.endswith(b'\n') and not (include_valid_tail and transcript.tell() == end)):
                 raise ValueError('Incomplete transcript record; retry after the next SessionEnd')
             record = json.loads(raw)
             digest.update(raw)
@@ -202,14 +218,16 @@ def batches(path, session, checkpoint, end):
                     messages = []
 
 
-def process_job(job_path, store_factory=None):
+def process_job(job_path, store_factory=None, user_id='codex', state_dir=None, metadata=None):
     from mem0_mcp import memory
     job = json.loads(job_path.read_text())
     stats = {'messages': 0, 'llm_calls': 0, 'inserted': 0, 'updated': 0}
     session = job['session']
-    cursor_path = STATE / f'{session}.cursor.json'
+    state_dir = Path(state_dir) if state_dir is not None else STATE
+    state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    cursor_path = state_dir / f'{session}.cursor.json'
     cursor = json.loads(cursor_path.read_text()) if cursor_path.exists() else {}
-    pending_path = STATE / f'{session}.pending.json'
+    pending_path = state_dir / f'{session}.pending.json'
     if pending_path.exists() and cursor:
         committed = f'{session}:{cursor["offset"]}:{cursor["sha256"]}'
         if json.loads(pending_path.read_text())['batch'] == committed:
@@ -221,7 +239,8 @@ def process_job(job_path, store_factory=None):
         job_path.unlink()
         return stats
     store = None
-    for messages, next_cursor in batches(path, session, cursor, job['end']):
+    for messages, next_cursor in batches(path, session, cursor, job['end'],
+                                         job.get('include_valid_tail', False)):
         if messages:
             stats['messages'] += len(messages)
             if store is None:
@@ -245,23 +264,40 @@ def process_job(job_path, store_factory=None):
                 if fact['continuation']:
                     if index != 0 or not last_task:
                         raise ValueError('Invalid task continuation')
-                    store.update(last_task['id'], text=fact['text'])
+                    rows = store.get_all(filters={'user_id': user_id,
+                                                  'toolkit_fact_id': last_task['key']})['results']
+                    if not rows:
+                        raise RuntimeError('Prior task memory disappeared; refusing update')
+                    stored_offset = rows[0].get('metadata', {}).get('codex_last_offset')
+                    # A separate manual import cursor may replay an older copy of a live session.
+                    if stored_offset is not None and stored_offset >= next_cursor['offset']:
+                        last_task = {**last_task, 'text': rows[0]['memory']}
+                        continue
+                    if stored_offset is None and metadata and metadata.get('toolkit_import') == 'mem0_import' and (
+                            rows[0].get('metadata', {}).get('toolkit_import') != 'mem0_import' or
+                            rows[0].get('metadata', {}).get('source_root') != metadata.get('source_root') or
+                            rows[0].get('metadata', {}).get('source_file') != metadata.get('source_file')):
+                        last_task = {**last_task, 'text': rows[0]['memory']}
+                        continue
+                    store.update(last_task['id'], text=fact['text'],
+                                 metadata={'codex_last_offset': next_cursor['offset']})
                     stats['updated'] += 1
                     last_task = {**last_task, 'text': fact['text']}
                     continue
                 key = hashlib.sha256(f'{batch_id}:{index}'.encode()).hexdigest()
-                filters = {'user_id': 'codex', 'toolkit_fact_id': key}
+                filters = {'user_id': user_id, 'toolkit_fact_id': key}
                 # Handles a crash after Oracle commit but before local checkpoint commit.
                 rows = store.get_all(filters=filters)['results']
                 if not rows:
-                    result = store.add(fact['text'], user_id='codex', infer=False,
-                                       metadata={'toolkit_fact_id': key, 'codex_session_id': session,
-                                                 'memory_kind': 'task_outcome'})
+                    result = store.add(fact['text'], user_id=user_id, infer=False,
+                                       metadata={**(metadata or {}), 'toolkit_fact_id': key,
+                                                 'codex_session_id': session, 'memory_kind': 'task_outcome',
+                                                 'codex_last_offset': next_cursor['offset']})
                     rows = store.get_all(filters=filters)['results']
                     if not result.get('results') or not rows:
                         raise RuntimeError('Mem0 insert was not confirmed in Oracle')
                     stats['inserted'] += len(result['results'])
-                last_task = {'id': rows[0]['id'], 'key': key, 'text': fact['text']}
+                last_task = {'id': rows[0]['id'], 'key': key, 'text': rows[0]['memory']}
             next_cursor['last_task'] = last_task
             write_json(cursor_path, next_cursor)
             pending_path.unlink()

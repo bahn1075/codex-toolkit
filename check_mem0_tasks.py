@@ -27,8 +27,9 @@ class Store:
         self.metadata[metadata['toolkit_fact_id']] = metadata
         return {'results': [{'id': metadata['toolkit_fact_id']}]}
 
-    def update(self, memory_id, text):
+    def update(self, memory_id, text, metadata=None):
         self.rows[memory_id]['memory'] = text
+        self.metadata[memory_id].update(metadata or {})
         self.updates += 1
         if self.fail_after_update:
             raise ConnectionError('Connection lost after update')
