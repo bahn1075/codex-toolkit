@@ -160,9 +160,14 @@ Codex CLI와 IDE 확장은 같은 MCP 설정을 공유합니다.
 
 ## Mem0
 
-신뢰한 hook은 세션 종료 후 사용자 메시지와 최종 응답에서 장기적으로 유용한 사실만
-추출해 저장합니다. 알려진 토큰·비밀번호 패턴은 마스킹하지만 모든 민감 정보를 완벽히
-판별할 수는 없으므로, 민감한 작업에서는 `/hooks`에서 자동 저장을 끄세요.
+신뢰한 hook은 세션 종료 후 완료된 작업마다 사용자 요청, Codex의 진행 내용,
+명령·MCP 결과와 최종 응답을 읽습니다. 의미 있는 작업마다 문제/증상, 실제 조치,
+관찰된 결과, 성공·실패·미해결 상태를 하나의 vector 기억으로 저장합니다.
+완료되지 않은 작업은 다음 세션 종료까지 기다리며, 긴 작업은 입력을 나눠 근거를
+요약한 뒤 작업별 기록을 만듭니다. 다음 요청이 직전 작업의 연속으로 판단되면 기존
+기록을 갱신합니다. 알려진 토큰·비밀번호 패턴은 마스킹하지만 모든
+민감 정보를 완벽히 판별할 수는 없으므로, 민감한 작업에서는 `/hooks`에서 자동
+저장을 끄세요.
 
 기존 문서 디렉터리를 가져올 때는 먼저 dry run으로 대상을 확인합니다.
 
@@ -207,5 +212,6 @@ MCP 서버에는 `HEADROOM_MODE=token`과 `HEADROOM_SAVINGS_PROFILE=balanced`를
 ~/.codex/toolkit/venv/bin/python check_configure.py
 ~/.codex/toolkit/venv/bin/python check_graft.py
 ~/.codex/toolkit/venv/bin/python check_mem0_session.py
+~/.codex/toolkit/venv/bin/python check_mem0_tasks.py
 ~/.codex/toolkit/venv/bin/python mem0_import/check_import_memories.py
 ```

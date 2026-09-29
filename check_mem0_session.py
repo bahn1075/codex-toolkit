@@ -25,7 +25,8 @@ class Store:
         self.calls += 1
         if self.fail:
             raise ConnectionError('Offline')
-        self.rows[metadata['toolkit_fact_id']] = fact
+        self.rows[metadata['toolkit_fact_id']] = {
+            'id': metadata['toolkit_fact_id'], 'memory': fact}
         if self.fail_after_insert:
             raise ConnectionError('Connection lost after commit')
         return {'results': [{'id': 'stored'}]}
@@ -60,19 +61,25 @@ with tempfile.TemporaryDirectory() as tmp:
     event('agent_message', 'Hidden progress', phase='commentary')
     event('agent_message', 'Confirmed Oracle.', phase='final_answer')
     with patch.object(s, 'STATE', state), patch.object(s, 'HOME', home), \
-            patch.object(m, 'extract_facts', side_effect=lambda store, messages: [v['content'] for v in messages]) as extract:
+            patch.object(s, 'extract_task_memories', side_effect=lambda store, messages, previous=None: [{
+                'text': messages[0]['content'] + ' ' + messages[-1]['content'],
+                'continuation': False}]) as extract:
         s.process_job(queue(), lambda: store)
-        assert list(store.rows.values()) == ['Project uses Oracle.', 'Confirmed Oracle.']
+        assert [row['memory'] for row in store.rows.values()] == ['Project uses Oracle. Confirmed Oracle.']
         assert (state / f'{session}.cursor.json').stat().st_mode & 0o777 == 0o600
         s.process_job(queue(), lambda: store)
-        assert store.calls == 2  # Same session end does not resubmit anything.
+        assert store.calls == 1  # Same session end does not resubmit anything.
 
         event('user_message', 'Resumed project uses Python.')
+        event('agent_message', 'Python check passed.', phase='final_answer')
         s.process_job(queue(), lambda: store)
-        assert extract.call_args.args[1] == [{'role': 'user', 'content': 'Resumed project uses Python.'}]
-        assert store.calls == 3
+        assert extract.call_args.args[1] == [
+            {'role': 'user', 'content': 'Resumed project uses Python.'},
+            {'role': 'final', 'content': 'Python check passed.'}]
+        assert store.calls == 2
 
         event('user_message', 'Retry this fact.')
+        event('agent_message', 'Retry completed.', phase='final_answer')
         job = queue()
         old_cursor = (state / f'{session}.cursor.json').read_bytes()
         store.fail = True
@@ -100,16 +107,17 @@ with tempfile.TemporaryDirectory() as tmp:
             'type': 'UserMessage', 'content': [{'type': 'text', 'text': 'New wire format user.'},
                                              {'type': 'image', 'image_url': 'ignored'}]}})
         append('event_msg', {'type': 'item_completed', 'item': {
+            'type': 'AgentMessage', 'phase': 'commentary',
+            'content': [{'type': 'Text', 'text': 'Checked the evidence.'}]}})
+        append('event_msg', {'type': 'item_completed', 'item': {
             'type': 'AgentMessage', 'phase': 'final_answer',
             'content': [{'type': 'Text', 'text': 'New wire format answer.'}]}})
-        append('event_msg', {'type': 'item_completed', 'item': {
-            'type': 'AgentMessage', 'phase': 'commentary',
-            'content': [{'type': 'Text', 'text': 'Excluded progress.'}]}})
         stats = s.process_job(queue(), lambda: store)
-        assert stats == {'messages': 2, 'llm_calls': 1, 'inserted': 2}
+        assert stats == {'messages': 3, 'llm_calls': 1, 'inserted': 1, 'updated': 0}
         assert [x['content'] for x in extract.call_args.args[1]] == [
-            'New wire format user.', 'New wire format answer.']
-        assert s.process_job(queue(), lambda: store) == {'messages': 0, 'llm_calls': 0, 'inserted': 0}
+            'New wire format user.', 'Checked the evidence.', 'New wire format answer.']
+        assert s.process_job(queue(), lambda: store) == {
+            'messages': 0, 'llm_calls': 0, 'inserted': 0, 'updated': 0}
 
         event('user_message', 'Malformed tail must not advance checkpoint.')
         with transcript.open('a') as out:
