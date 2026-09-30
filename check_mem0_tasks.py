@@ -191,7 +191,7 @@ with patch.object(mem0_mcp, 'extract_facts', side_effect=lambda store, messages,
         patch.object(mem0_mcp, 'extract_task_records', return_value=[
             {'text': '완료된 작업', 'continuation': False}]) as finish:
     assert session_import.extract_task_memories(store, [
-        {'role': 'user', 'content': '장기 작업 ' * 1800},
+        {'role': 'user', 'content': '장기 작업 ' * 3000},
         {'role': 'final', 'content': '성공을 검증했다'}]) == [
             {'text': '완료된 작업', 'continuation': False}]
     assert summarize.call_count > 1

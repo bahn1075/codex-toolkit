@@ -75,7 +75,7 @@ mcp = FastMCP("mem0")
 
 def extract_facts(store, messages, system_prompt=None):
     """Validate extraction explicitly: upstream can silently treat parse errors as no facts."""
-    response = store.llm.client.with_options(timeout=120, max_retries=1).chat.completions.create(
+    response = store.llm.client.with_options(timeout=300, max_retries=0).chat.completions.create(
         model=store.llm.config.model, max_tokens=4096, temperature=0.1,
         response_format=store.llm.config.lmstudio_response_format, messages=[{
         "role": "system", "content": system_prompt or (
@@ -131,7 +131,7 @@ def extract_task_records(store, messages, previous_task=None):
         )
     labels = {'success': '성공', 'failure': '실패', 'unresolved': '미해결'}
     for attempt in range(2):
-        response = store.llm.client.with_options(timeout=120, max_retries=1).chat.completions.create(
+        response = store.llm.client.with_options(timeout=300, max_retries=0).chat.completions.create(
             model=store.llm.config.model, max_tokens=4096, temperature=0.1,
             response_format={"type": "json_schema", "json_schema": {
                 "name": "codex_task_outcomes", "schema": schema}},

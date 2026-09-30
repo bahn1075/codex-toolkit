@@ -55,6 +55,18 @@ with tempfile.TemporaryDirectory() as tmp:
             assert spawn.call_args.kwargs['start_new_session'] is True
         return next(state.glob('*.job.json'))
 
+    # A session start must not re-run a failed extraction from a prior session.
+    with patch.object(s, 'STATE', state), patch.object(s.subprocess, 'Popen') as spawn:
+        s.enqueue({'hook_event_name': 'SessionStart'})
+        spawn.assert_not_called()
+
+    # A completed turn under the advertised budget needs one model extraction.
+    with patch.object(m, 'extract_task_records', return_value=[{'text': 'stored', 'continuation': False}]) as records, \
+            patch.object(m, 'extract_facts', side_effect=AssertionError('Unnecessary summary')):
+        assert s.extract_task_memories(store, [{'role': 'user', 'content': 'x' * 8900}]) == [
+            {'text': 'stored', 'continuation': False}]
+        assert records.call_count == 1
+
     append('session_meta', {'id': session})
     event('user_message', 'Project uses Oracle.')
     append('response_item', {'type': 'message', 'role': 'user', 'content': 'duplicate'})

@@ -76,22 +76,23 @@ def complete_end(path, include_valid_tail=False):
 def enqueue(event):
     if event.get('hook_event_name') not in ('SessionStart', 'SessionEnd'):
         raise ValueError('Expected SessionStart or SessionEnd')
+    if event['hook_event_name'] == 'SessionStart':
+        return
     STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if event['hook_event_name'] == 'SessionEnd':
-        session = str(uuid.UUID(event['session_id']))
-        if not event.get('transcript_path'):
-            raise ValueError('SessionEnd has no transcript_path')
-        path = Path(event['transcript_path']).resolve(strict=True)
-        roots = (HOME / 'sessions', HOME / 'archived_sessions')
-        if not any(path.is_relative_to(root.resolve()) for root in roots):
-            raise ValueError('Transcript is outside Codex session directories')
-        # Only enqueue complete JSONL records; a later end event picks up a partial tail.
-        end = complete_end(path)
-        if not end:
-            raise ValueError('Transcript contains no complete records')
-        job = STATE / f'{session}-{end:020d}.job.json'
-        if not job.exists():
-            write_json(job, {'session': session, 'path': str(path), 'end': end})
+    session = str(uuid.UUID(event['session_id']))
+    if not event.get('transcript_path'):
+        raise ValueError('SessionEnd has no transcript_path')
+    path = Path(event['transcript_path']).resolve(strict=True)
+    roots = (HOME / 'sessions', HOME / 'archived_sessions')
+    if not any(path.is_relative_to(root.resolve()) for root in roots):
+        raise ValueError('Transcript is outside Codex session directories')
+    # Only enqueue complete JSONL records; a later end event picks up a partial tail.
+    end = complete_end(path)
+    if not end:
+        raise ValueError('Transcript contains no complete records')
+    job = STATE / f'{session}-{end:020d}.job.json'
+    if not job.exists():
+        write_json(job, {'session': session, 'path': str(path), 'end': end})
     # No Mem0 imports or network I/O in the three-second hook window.
     with (STATE / 'worker.log').open('ab') as log:
         os.chmod(STATE / 'worker.log', 0o600)
@@ -157,9 +158,9 @@ def extract_task_memories(store, messages, previous=None):
     chunks, current, size = [], [], 0
     for message in messages:
         content = message['content']
-        for start in range(0, len(content), MAX_TEXT // 2):
-            part = {'role': message['role'], 'content': content[start:start + MAX_TEXT // 2]}
-            if current and size + len(part['content']) > MAX_TEXT // 2:
+        for start in range(0, len(content), MAX_TEXT):
+            part = {'role': message['role'], 'content': content[start:start + MAX_TEXT]}
+            if current and size + len(part['content']) > MAX_TEXT:
                 chunks.append(current)
                 current, size = [], 0
             current.append(part)
