@@ -155,6 +155,7 @@ def task_message(record):
 def extract_task_memories(store, messages, previous=None):
     """Bound inference input for long tasks, then extract their causal records."""
     from mem0_mcp import extract_facts, extract_task_records
+    previous_problem = previous['text'].splitlines()[0] if previous else None
     chunks, current, size = [], [], 0
     for message in messages:
         content = message['content']
@@ -168,7 +169,7 @@ def extract_task_memories(store, messages, previous=None):
     if current:
         chunks.append(current)
     if len(chunks) == 1:
-        return extract_task_records(store, chunks[0], previous['text'] if previous else None)
+        return extract_task_records(store, chunks[0], previous_problem)
     summary = []
     for chunk in chunks:
         summary = extract_facts(store, [{'role': 'user', 'content': json.dumps({
@@ -180,11 +181,11 @@ def extract_task_memories(store, messages, previous=None):
             keep = MAX_TEXT // 4 - 40
             summary = [summary_text[:keep] + '\n[intermediate evidence omitted]\n' + summary_text[-keep:]]
     return extract_task_records(store, [{'role': 'user', 'content': '\n'.join(summary)}],
-                                previous['text'] if previous else None)
+                                previous_problem)
 
 
 def batches(path, session, checkpoint, end, include_valid_tail=False):
-    """Yield each completed Codex turn with its user request and observed work."""
+    """Yield each user request with its observed work once a new request or final arrives."""
     offset = checkpoint.get('offset', 0)
     digest = hashlib.sha256()
     with path.open('rb') as transcript:
@@ -204,6 +205,7 @@ def batches(path, session, checkpoint, end, include_valid_tail=False):
             raise ValueError('Transcript prefix changed; checkpoint retained')
         messages = []
         while transcript.tell() < end:
+            before = {'offset': transcript.tell(), 'sha256': digest.hexdigest()}
             raw = transcript.readline()
             if not raw or transcript.tell() > end or (
                     not raw.endswith(b'\n') and not (include_valid_tail and transcript.tell() == end)):
@@ -212,6 +214,10 @@ def batches(path, session, checkpoint, end, include_valid_tail=False):
             digest.update(raw)
             message = task_message(record)
             if message and message['content'].strip():
+                if message['role'] == 'user' and messages:
+                    if any(part['role'] == 'user' for part in messages):
+                        yield messages, before
+                    messages = []
                 messages.append(message)
                 if message['role'] == 'final':
                     if any(part['role'] == 'user' for part in messages):
@@ -254,37 +260,12 @@ def process_job(job_path, store_factory=None, user_id='codex', state_dir=None, m
                     raise ValueError('Pending batch mismatch; refusing to skip unsaved facts')
             else:
                 pending = {'batch': batch_id, 'facts': [
-                    {'text': redact(fact['text']), 'continuation': fact['continuation']}
+                    {'text': redact(fact['text'])}
                     for fact in extract_task_memories(store, messages, cursor.get('last_task'))]}
                 stats['llm_calls'] += 1
                 write_json(pending_path, pending)
-            # ponytail: only the immediately prior task can be continued; for nonadjacent
-            # revisits, search session task memories and let extraction select a match.
             last_task = cursor.get('last_task')
             for index, fact in enumerate(pending['facts']):
-                if fact['continuation']:
-                    if index != 0 or not last_task:
-                        raise ValueError('Invalid task continuation')
-                    rows = store.get_all(filters={'user_id': user_id,
-                                                  'toolkit_fact_id': last_task['key']})['results']
-                    if not rows:
-                        raise RuntimeError('Prior task memory disappeared; refusing update')
-                    stored_offset = rows[0].get('metadata', {}).get('codex_last_offset')
-                    # A separate manual import cursor may replay an older copy of a live session.
-                    if stored_offset is not None and stored_offset >= next_cursor['offset']:
-                        last_task = {**last_task, 'text': rows[0]['memory']}
-                        continue
-                    if stored_offset is None and metadata and metadata.get('toolkit_import') == 'mem0_import' and (
-                            rows[0].get('metadata', {}).get('toolkit_import') != 'mem0_import' or
-                            rows[0].get('metadata', {}).get('source_root') != metadata.get('source_root') or
-                            rows[0].get('metadata', {}).get('source_file') != metadata.get('source_file')):
-                        last_task = {**last_task, 'text': rows[0]['memory']}
-                        continue
-                    store.update(last_task['id'], text=fact['text'],
-                                 metadata={'codex_last_offset': next_cursor['offset']})
-                    stats['updated'] += 1
-                    last_task = {**last_task, 'text': fact['text']}
-                    continue
                 key = hashlib.sha256(f'{batch_id}:{index}'.encode()).hexdigest()
                 filters = {'user_id': user_id, 'toolkit_fact_id': key}
                 # Handles a crash after Oracle commit but before local checkpoint commit.

@@ -15,7 +15,7 @@ class Store:
         self.rows = {}
         self.metadata = {}
         self.updates = 0
-        self.fail_after_update = False
+        self.fail_after_insert = False
 
     def get_all(self, filters):
         row = self.rows.get(filters['toolkit_fact_id'])
@@ -26,14 +26,14 @@ class Store:
         self.rows[metadata['toolkit_fact_id']] = {
             'id': metadata['toolkit_fact_id'], 'memory': fact}
         self.metadata[metadata['toolkit_fact_id']] = metadata
+        if self.fail_after_insert:
+            raise ConnectionError('Connection lost after insert')
         return {'results': [{'id': metadata['toolkit_fact_id']}]}
 
     def update(self, memory_id, text, metadata=None):
         self.rows[memory_id]['memory'] = text
         self.metadata[memory_id].update(metadata or {})
         self.updates += 1
-        if self.fail_after_update:
-            raise ConnectionError('Connection lost after update')
         return {'message': 'Memory updated successfully!'}
 
 
@@ -77,8 +77,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     def extract(_store, messages, previous=None):
         seen.append(messages)
-        return [{'text': f'문제: {messages[0]["content"]} 조치 및 결과: {messages[-1]["content"]}',
-                 'continuation': False}]
+        return [{'text': f'문제: {messages[0]["content"]} 조치 및 결과: {messages[-1]["content"]}'}]
 
     with patch.object(session_import, 'STATE', state), patch.object(session_import, 'HOME', root), \
             patch.object(session_import, 'extract_task_memories', side_effect=extract):
@@ -94,6 +93,39 @@ with tempfile.TemporaryDirectory() as tmp:
         assert session_import.process_job(queue(), lambda: store)['inserted'] == 0
 
 print('PASS: two completed tasks produce two causal memories; unfinished work waits.')
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    state = root / 'state'
+    state.mkdir()
+    transcript = root / 'sessions' / 'steered.jsonl'
+    transcript.parent.mkdir()
+    session_id = str(uuid.uuid4())
+    events = [
+        {'type': 'session_meta', 'payload': {'id': session_id}},
+        {'type': 'event_msg', 'payload': {'type': 'user_message', 'message': '첫 요청'}},
+        {'type': 'event_msg', 'payload': {'type': 'agent_message', 'phase': 'commentary', 'message': '첫 조사'}},
+        {'type': 'event_msg', 'payload': {'type': 'user_message', 'message': '두 번째 요청'}},
+        {'type': 'event_msg', 'payload': {'type': 'agent_message', 'phase': 'final_answer', 'message': '두 번째 결과'}},
+    ]
+    transcript.write_text(''.join(json.dumps(event, ensure_ascii=False) + '\n' for event in events))
+    job = state / 'steered.job.json'
+    session_import.write_json(job, {'session': session_id, 'path': str(transcript), 'end': transcript.stat().st_size})
+    store = Store()
+    seen = []
+
+    def extract(_store, messages, previous=None):
+        seen.append((messages, previous))
+        return [{'text': messages[0]['content'] + ': ' + messages[-1]['content']}]
+
+    with patch.object(session_import, 'extract_task_memories', side_effect=extract):
+        stats = session_import.process_job(job, lambda: store, state_dir=state)
+    assert stats['inserted'] == 2 and stats['updated'] == 0
+    assert len(store.rows) == 2
+    assert [row['memory'] for row in store.rows.values()] == ['첫 요청: 첫 조사', '두 번째 요청: 두 번째 결과']
+    assert seen[1][1]['text'] == '첫 요청: 첫 조사'
+
+print('PASS: steering within a turn creates a separate vector for each user message.')
 
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
@@ -118,10 +150,8 @@ with tempfile.TemporaryDirectory() as tmp:
     def extract_continued(_store, messages, previous=None):
         observed_previous.append(previous)
         if previous:
-            return [{'text': '문제/증상: 배포 오류\n조치: 태그 오류 조사 및 수정\n결과: 배포 성공 검증\n상태: 성공',
-                     'continuation': True}]
-        return [{'text': '문제/증상: 배포 오류\n조치: 태그 조사\n결과: 수정 전\n상태: 미해결',
-                 'continuation': False}]
+            return [{'text': '문제/증상: 태그 수정 요청\n조치: 태그 수정\n결과: 배포 성공 검증\n상태: 성공'}]
+        return [{'text': '문제/증상: 배포 오류\n조치: 태그 조사\n결과: 수정 전\n상태: 미해결'}]
 
     with patch.object(session_import, 'STATE', state), patch.object(session_import, 'HOME', root), \
             patch.object(session_import, 'extract_task_memories', side_effect=extract_continued):
@@ -136,50 +166,55 @@ with tempfile.TemporaryDirectory() as tmp:
                                     'session_id': session_id, 'transcript_path': str(transcript)})
         job = next(state.glob('*.job.json'))
         old_cursor = (state / f'{session_id}.cursor.json').read_bytes()
-        store.fail_after_update = True
+        store.fail_after_insert = True
         try:
             session_import.process_job(job, lambda: store)
-            raise AssertionError('Expected lost update acknowledgement')
+            raise AssertionError('Expected lost insert acknowledgement')
         except ConnectionError:
             pass
         assert (state / f'{session_id}.cursor.json').read_bytes() == old_cursor
-        store.fail_after_update = False
+        store.fail_after_insert = False
         stats = session_import.process_job(job, lambda: store)
-        assert len(store.rows) == 1
-        assert store.updates == 2
-        assert stats['updated'] == 1
-        assert '배포 성공 검증' in next(iter(store.rows.values()))['memory']
+        assert len(store.rows) == 2
+        assert store.updates == 0
+        assert stats['inserted'] == 0  # Retry confirms the already committed insert.
+        assert stats['updated'] == 0
+        assert any('수정 전' in row['memory'] for row in store.rows.values())
+        assert any('배포 성공 검증' in row['memory'] for row in store.rows.values())
         assert observed_previous[0] is None
         assert '배포 오류' in observed_previous[1]['text']
 
-print('PASS: a continued task updates its causal memory instead of duplicating it.')
+print('PASS: each user request inserts its own memory; retries do not duplicate it.')
 
 store = MagicMock()
 choice = store.llm.client.with_options.return_value.chat.completions.create.return_value.choices.__getitem__.return_value
 choice.finish_reason = 'stop'
 choice.message.content = json.dumps({'tasks': [
     {'problem': '배포 실패', 'actions': '로그 확인 후 태그 수정',
-     'result': '배포가 정상 상태임을 확인', 'status': 'success', 'continuation': False},
+     'result': '배포가 정상 상태임을 확인', 'status': 'success'},
     {'problem': '알림 누락', 'actions': '라우팅 설정 조사',
-     'result': '외부 수신자 미설정 확인', 'status': 'unresolved', 'continuation': False},
+     'result': '외부 수신자 미설정 확인', 'status': 'unresolved'},
 ]})
+try:
+    mem0_mcp.extract_task_records(store, [{'role': 'user', 'content': '한 요청'}])
+    raise AssertionError('One user request must produce exactly one memory')
+except ValueError:
+    pass
+choice.message.content = json.dumps({'tasks': [{
+    'problem': '배포 실패', 'actions': '로그 확인 후 태그 수정',
+    'result': '배포가 정상 상태임을 확인', 'status': 'success'}]})
 assert mem0_mcp.extract_task_records(store, [{'role': 'user', 'content': '두 작업'}]) == [
-    {'text': '문제/증상: 배포 실패\n조치: 로그 확인 후 태그 수정\n결과: 배포가 정상 상태임을 확인\n상태: 성공',
-     'continuation': False},
-    {'text': '문제/증상: 알림 누락\n조치: 라우팅 설정 조사\n결과: 외부 수신자 미설정 확인\n상태: 미해결',
-     'continuation': False},
+    {'text': '문제/증상: 배포 실패\n조치: 로그 확인 후 태그 수정\n결과: 배포가 정상 상태임을 확인\n상태: 성공'},
 ]
 choice.message.content = json.dumps({'tasks': [{
-    'problem': '배포 실패', 'actions': '조사', 'result': '미확인', 'status': 'invented',
-    'continuation': False}]})
+    'problem': '배포 실패', 'actions': '조사', 'result': '미확인', 'status': 'invented'}]})
 try:
     mem0_mcp.extract_task_records(store, [])
     raise AssertionError('Invalid status must be rejected')
 except ValueError:
     pass
 choice.message.content = json.dumps({'tasks': [{
-    'problem': '배포 실패', 'actions': '조사', 'result': '미확인', 'status': ['success'],
-    'continuation': False}]})
+    'problem': '배포 실패', 'actions': '조사', 'result': '미확인', 'status': ['success']}]})
 try:
     mem0_mcp.extract_task_records(store, [])
     raise AssertionError('Non-string status must be rejected')
@@ -189,19 +224,24 @@ except ValueError:
 with patch.object(mem0_mcp, 'extract_facts', side_effect=lambda store, messages, prompt: [
         '문제와 조치가 이어진다']) as summarize, \
         patch.object(mem0_mcp, 'extract_task_records', return_value=[
-            {'text': '완료된 작업', 'continuation': False}]) as finish:
+            {'text': '완료된 작업'}]) as finish:
     assert session_import.extract_task_memories(store, [
         {'role': 'user', 'content': '장기 작업 ' * 3000},
         {'role': 'final', 'content': '성공을 검증했다'}]) == [
-            {'text': '완료된 작업', 'continuation': False}]
+            {'text': '완료된 작업'}]
     assert summarize.call_count > 1
     assert '문제와 조치가 이어진다' in finish.call_args.args[1][0]['content']
 
-print('PASS: multiple outcomes per turn, strict status, bounded long-task inference.')
+with patch.object(mem0_mcp, 'extract_task_records', return_value=[{'text': '현재 요청 결과'}]) as finish:
+    session_import.extract_task_memories(store, [{'role': 'user', 'content': '그 태그를 고쳐줘'}],
+                                         {'text': '문제/증상: 이미지 태그 오류\n조치: 로그 조사\n결과: 오타 발견'})
+    assert finish.call_args.args[2] == '문제/증상: 이미지 태그 오류'
+
+print('PASS: one outcome per request, strict status, bounded long-task inference.')
 
 def task_response(problem, actions, result):
     payload = {'tasks': [{'problem': problem, 'actions': actions, 'result': result,
-                          'status': 'unresolved', 'continuation': False}]}
+                          'status': 'unresolved'}]}
     choice = SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
         content=json.dumps(payload, ensure_ascii=False), model_extra={}))
     return SimpleNamespace(choices=[choice])
@@ -237,11 +277,11 @@ def growing_summary(_store, messages, _prompt):
 
 with patch.object(mem0_mcp, 'extract_facts', side_effect=growing_summary), \
         patch.object(mem0_mcp, 'extract_task_records', return_value=[
-            {'text': '긴 작업 결과', 'continuation': False}]) as finish:
+            {'text': '긴 작업 결과'}]) as finish:
     assert session_import.extract_task_memories(store, [
         {'role': 'user', 'content': '긴 작업 ' * 4500},
         {'role': 'final', 'content': '검증 완료'}]) == [
-            {'text': '긴 작업 결과', 'continuation': False}]
+            {'text': '긴 작업 결과'}]
     assert len(finish.call_args.args[1][0]['content']) <= session_import.MAX_TEXT // 2
 
 print('PASS: growing evidence remains bounded across a long task.')

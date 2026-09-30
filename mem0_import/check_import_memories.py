@@ -115,23 +115,21 @@ with tempfile.TemporaryDirectory() as tmp:
         first = messages[0]['content']
         if first == '그 태그를 고쳐줘':
             assert previous and '배포' in previous['text']
-            return [{'text': '문제: 배포 실패; 조치: 태그 조사와 수정; 결과: 배포 성공',
-                     'continuation': True}]
-        return [{'text': f'문제: {first}; 조치와 결과: {messages[-1]["content"]}',
-                 'continuation': False}]
+            return [{'text': '문제: 태그 수정 요청; 조치: 태그 수정; 결과: 배포 성공'}]
+        return [{'text': f'문제: {first}; 조치와 결과: {messages[-1]["content"]}'}]
 
     with patch('mem0_session.extract_task_memories', side_effect=extract):
         first = importer.import_tree(root, store_factory=lambda: store, show_progress=False,
                                      state_root=Path(tmp) / 'state')
         second = importer.import_tree(root, store_factory=lambda: store, show_progress=False,
                                       state_root=Path(tmp) / 'state')
-    assert first['inserted'] == 2 and first['updated'] == 1 and first['errors'] == 0
-    assert len(store.rows) == 2 and store.updates == 1
+    assert first['inserted'] == 3 and first['updated'] == 0 and first['errors'] == 0
+    assert len(store.rows) == 3 and store.updates == 0
     assert any('배포 성공' in row['memory'] for row in store.rows.values())
     assert second['inserted'] == 0 and second['updated'] == 0 and second['errors'] == 0
     assert len(seen) == 3
 
-print('PASS: Codex JSONL imports task outcomes, merges continuation, and resumes idempotently.')
+print('PASS: Codex JSONL imports one vector per request and resumes idempotently.')
 
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp) / 'archive'
@@ -152,16 +150,16 @@ with tempfile.TemporaryDirectory() as tmp:
 
     def extract(_store, messages, previous=None):
         task = messages[0]['content']
-        return [{'text': f'progress through {task}', 'continuation': task != 'task one'}]
+        return [{'text': f'progress through {task}'}]
 
     with patch('mem0_session.extract_task_memories', side_effect=extract):
         importer.import_tree(root, store_factory=lambda: store, show_progress=False,
                              state_root=Path(tmp) / 'full-state')
-        latest = next(iter(store.rows.values()))['memory']
+        latest = {key: row['memory'] for key, row in store.rows.items()}
         transcript.write_text(''.join(json.dumps(event) + '\n' for event in events[:5]))
         result = importer.import_tree(root, store_factory=lambda: store, show_progress=False,
                                       state_root=Path(tmp) / 'older-state')
-    assert result['errors'] == 0 and next(iter(store.rows.values()))['memory'] == latest
+    assert result['errors'] == 0 and {key: row['memory'] for key, row in store.rows.items()} == latest
 
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
@@ -179,7 +177,7 @@ with tempfile.TemporaryDirectory() as tmp:
         json.dumps({'type': 'event_msg', 'payload': {'type': 'user_message', 'message': 'task'}}) + '\n' +
         json.dumps({'type': 'event_msg', 'payload': {'type': 'agent_message', 'phase': 'final_answer',
                                                   'message': 'done'}}))
-    with patch('mem0_session.extract_task_memories', return_value=[{'text': 'task done', 'continuation': False}]):
+    with patch('mem0_session.extract_task_memories', return_value=[{'text': 'task done'}]):
         result = importer.import_tree(root, store_factory=TaskStore, show_progress=False,
                                       state_root=root / 'state')
     assert result['chunks'] == 1 and result['inserted'] == 1 and result['errors'] == 0
