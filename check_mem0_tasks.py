@@ -150,8 +150,8 @@ with tempfile.TemporaryDirectory() as tmp:
     def extract_continued(_store, messages, previous=None):
         observed_previous.append(previous)
         if previous:
-            return [{'text': '문제/증상: 태그 수정 요청\n조치: 태그 수정\n결과: 배포 성공 검증\n상태: 성공'}]
-        return [{'text': '문제/증상: 배포 오류\n조치: 태그 조사\n결과: 수정 전\n상태: 미해결'}]
+            return [{'text': '문제/증상: 태그 수정 요청\n조치: 태그 수정\n결과: 배포 성공 검증'}]
+        return [{'text': '문제/증상: 배포 오류\n조치: 태그 조사\n결과: 수정 전'}]
 
     with patch.object(session_import, 'STATE', state), patch.object(session_import, 'HOME', root), \
             patch.object(session_import, 'extract_task_memories', side_effect=extract_continued):
@@ -191,9 +191,9 @@ choice = store.llm.client.with_options.return_value.chat.completions.create.retu
 choice.finish_reason = 'stop'
 choice.message.content = json.dumps({'tasks': [
     {'problem': '배포 실패', 'actions': '로그 확인 후 태그 수정',
-     'result': '배포가 정상 상태임을 확인', 'status': 'success'},
+     'result': '배포가 정상 상태임을 확인'},
     {'problem': '알림 누락', 'actions': '라우팅 설정 조사',
-     'result': '외부 수신자 미설정 확인', 'status': 'unresolved'},
+     'result': '외부 수신자 미설정 확인'},
 ]})
 try:
     mem0_mcp.extract_task_records(store, [{'role': 'user', 'content': '한 요청'}])
@@ -202,22 +202,22 @@ except ValueError:
     pass
 choice.message.content = json.dumps({'tasks': [{
     'problem': '배포 실패', 'actions': '로그 확인 후 태그 수정',
-    'result': '배포가 정상 상태임을 확인', 'status': 'success'}]})
+    'result': '배포가 정상 상태임을 확인'}]})
 assert mem0_mcp.extract_task_records(store, [{'role': 'user', 'content': '두 작업'}]) == [
-    {'text': '문제/증상: 배포 실패\n조치: 로그 확인 후 태그 수정\n결과: 배포가 정상 상태임을 확인\n상태: 성공'},
+    {'text': '문제/증상: 배포 실패\n조치: 로그 확인 후 태그 수정\n결과: 배포가 정상 상태임을 확인'},
 ]
 choice.message.content = json.dumps({'tasks': [{
-    'problem': '배포 실패', 'actions': '조사', 'result': '미확인', 'status': 'invented'}]})
+    'problem': '배포 실패', 'actions': '조사', 'result': ''}]})
 try:
     mem0_mcp.extract_task_records(store, [])
-    raise AssertionError('Invalid status must be rejected')
+    raise AssertionError('Empty result must be rejected')
 except ValueError:
     pass
 choice.message.content = json.dumps({'tasks': [{
-    'problem': '배포 실패', 'actions': '조사', 'result': '미확인', 'status': ['success']}]})
+    'problem': '배포 실패', 'actions': '조사', 'result': ['미확인']}]})
 try:
     mem0_mcp.extract_task_records(store, [])
-    raise AssertionError('Non-string status must be rejected')
+    raise AssertionError('Non-string result must be rejected')
 except ValueError:
     pass
 
@@ -237,11 +237,10 @@ with patch.object(mem0_mcp, 'extract_task_records', return_value=[{'text': '현�
                                          {'text': '문제/증상: 이미지 태그 오류\n조치: 로그 조사\n결과: 오타 발견'})
     assert finish.call_args.args[2] == '문제/증상: 이미지 태그 오류'
 
-print('PASS: one outcome per request, strict status, bounded long-task inference.')
+print('PASS: one outcome per request, observed results without status labels, bounded long-task inference.')
 
 def task_response(problem, actions, result):
-    payload = {'tasks': [{'problem': problem, 'actions': actions, 'result': result,
-                          'status': 'unresolved'}]}
+    payload = {'tasks': [{'problem': problem, 'actions': actions, 'result': result}]}
     choice = SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
         content=json.dumps(payload, ensure_ascii=False), model_extra={}))
     return SimpleNamespace(choices=[choice])
