@@ -17,6 +17,7 @@ import urllib.request
 from getpass import getpass
 
 import tomlkit
+from model_api import select_model, validate_response
 
 HOME = pathlib.Path.home()
 CODEX = HOME / '.codex'
@@ -237,7 +238,7 @@ def configure():
 
 
 def mem0_api_url(prompt, example, payload, existing=None, response_kind=None):
-    """Collect an HTTP(S) model API URL without probing an authenticated service."""
+    """Validate an API URL using a currently loaded LM Studio model."""
     print(f'Example: {example}')
     curl = shutil.which('curl')
     if not curl:
@@ -270,15 +271,19 @@ def mem0_api_url(prompt, example, payload, existing=None, response_kind=None):
         print('안내: API URL을 검증합니다. (curl로 단순 테스트 수행)')
         print('Test가 진행중입니다')
         try:
+            kind = 'embedding' if response_kind == 'embedding' else 'llm'
+            _, model = select_model(value, kind)
+            request_payload = {**payload, 'model': model}
+            print(f'현재 서빙 모델: {model}')
             result = subprocess.run([
                 curl, '--fail', '--silent', '--show-error', '--max-time', '10',
                 '--request', 'POST', value,
                 '--header', 'Authorization: Bearer local-no-key',
                 '--header', 'Content-Type: application/json',
-                '--data', json.dumps(payload),
+                '--data', json.dumps(request_payload),
             ], capture_output=True, text=True, timeout=15)
-        except subprocess.TimeoutExpired:
-            print(f'{prompt} validation failed: curl request timed out')
+        except (subprocess.TimeoutExpired, OSError, ValueError) as error:
+            print(f'{prompt} validation failed: {error}')
             print('해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.')
             retrying = True
             continue
@@ -287,18 +292,13 @@ def mem0_api_url(prompt, example, payload, existing=None, response_kind=None):
             print('해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.')
             retrying = True
             continue
-        if response_kind == 'embedding':
-            try:
-                response = json.loads(result.stdout)
-            except json.JSONDecodeError:
-                response = None
-            if (not isinstance(response, dict) or not isinstance(response.get('data'), list)
-                    or not response['data'] or not isinstance(response['data'][0], dict)
-                    or not isinstance(response['data'][0].get('embedding'), list)):
-                print(f'{prompt} validation failed: response is not an embeddings result')
-                print('해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.')
-                retrying = True
-                continue
+        try:
+            validate_response(json.loads(result.stdout), kind)
+        except ValueError as error:
+            print(f'{prompt} validation failed: {error}')
+            print('해당 URL은 동작하지 않습니다. 올바른 URL을 다시 입력해주세요.')
+            retrying = True
+            continue
         print('입력하신 경로가 정상작동하였습니다. 해당 값으로 확정합니다')
         return value
 
@@ -312,20 +312,20 @@ def mem0_settings():
         if 'inference_api_url' not in data:
             data['inference_api_url'] = mem0_api_url(
                 'Mem0 inference API URL', 'http://HOST:1234/v1/chat/completions',
-                {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1})
+                {'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 64})
         else:
             data['inference_api_url'] = mem0_api_url(
                 'Mem0 inference API URL', 'http://HOST:1234/v1/chat/completions',
-                {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1},
+                {'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 64},
                 data['inference_api_url'])
         if 'embedding_api_url' not in data:
             data['embedding_api_url'] = mem0_api_url(
                 'Mem0 embedding API URL', 'http://HOST:1234/v1/embeddings',
-                {'model': 'text-embedding-bge-m3', 'input': 'ping'}, response_kind='embedding')
+                {'input': 'ping'}, response_kind='embedding')
         else:
             data['embedding_api_url'] = mem0_api_url(
                 'Mem0 embedding API URL', 'http://HOST:1234/v1/embeddings',
-                {'model': 'text-embedding-bge-m3', 'input': 'ping'}, data['embedding_api_url'],
+                {'input': 'ping'}, data['embedding_api_url'],
                 response_kind='embedding')
         write(MEM0_CONFIG, json.dumps(data, indent=2) + '\n')
         return
@@ -338,10 +338,10 @@ def mem0_settings():
     wallet_password = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
     inference_api_url = mem0_api_url(
         'Mem0 inference API URL', 'http://HOST:1234/v1/chat/completions',
-        {'model': 'qwen3.8-27b-mlx', 'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 1})
+        {'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 64})
     embedding_api_url = mem0_api_url(
         'Mem0 embedding API URL', 'http://HOST:1234/v1/embeddings',
-        {'model': 'text-embedding-bge-m3', 'input': 'ping'}, response_kind='embedding')
+        {'input': 'ping'}, response_kind='embedding')
     if not username or not password or not re.fullmatch(r'[A-Za-z0-9_.-]+', alias):
         raise RuntimeError('Username, password and a simple TNS alias are required.')
     if not re.search(rf'(?mi)^\s*{re.escape(alias)}\s*=', (wallet / 'tnsnames.ora').read_text()):

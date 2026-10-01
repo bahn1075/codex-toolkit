@@ -11,6 +11,9 @@ from unittest.mock import patch
 import tomlkit
 import configure as c
 
+model_response = json.dumps({'choices': [{'message': {'content': 'pong'}}],
+                             'data': [{'embedding': [0.1] * 1024}]})
+
 
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
@@ -227,7 +230,7 @@ mock_brew() {
     *) exit 99 ;;
   esac
 }
-mock_curl() {
+curl() {
   printf '%s\n' 'mkdir -p "$HOME/.local/bin"'
   printf '%s\n' 'printf "#!/bin/sh\\necho native-codex\\n" > "$HOME/.local/bin/codex"'
   printf '%s\n' 'chmod +x "$HOME/.local/bin/codex"'
@@ -247,13 +250,14 @@ with tempfile.TemporaryDirectory() as tmp:
     (wallet / 'tnsnames.ora').write_text('demo_medium = (DESCRIPTION=...)\n')
     target = Path(tmp) / 'mem0.json'
     with patch.object(c, 'MEM0_CONFIG', target), \
+            patch.object(c, 'select_model', side_effect=lambda url, kind: ('http://server/v1', 'served-' + kind)), \
             patch('builtins.input', side_effect=[
                 str(wallet), 'dbuser', 'demo_medium',
                 'http://inference.example/api/v1/chat/completions',
                 'http://embedding.example/api/v1/embedding']), \
             patch.object(c, 'getpass', side_effect=['secret', 'wallet-secret']), \
             patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess(
-                [], 0, '{"data":[{"embedding":[0.1]}]}', '')) as curl:
+                [], 0, model_response, '')) as curl:
         c.mem0_settings()
         curl_calls = curl.call_count
     mem0 = json.loads(target.read_text())
@@ -272,9 +276,10 @@ with tempfile.TemporaryDirectory() as tmp:
         'embedding_api_url': 'http://embedding.example/api/v1/embedding',
     }))
     with patch.object(c, 'MEM0_CONFIG', target), \
+            patch.object(c, 'select_model', side_effect=lambda url, kind: ('http://server/v1', 'served-' + kind)), \
             patch('builtins.input', side_effect=['', 'https://new.example/api/v1/embeddings']), \
             patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess(
-                [], 0, '{"data":[{"embedding":[0.1]}]}', '')) as curl, \
+                [], 0, model_response, '')) as curl, \
             contextlib.redirect_stdout(io.StringIO()) as output:
         c.mem0_settings()
         curl_calls = curl.call_count
@@ -295,12 +300,13 @@ with tempfile.TemporaryDirectory() as tmp:
         'embedding_api_url': 'http://embedding.example/v1/embedding',
     }))
     failed = subprocess.CompletedProcess([], 7, '', 'curl: (7) Connection refused')
-    succeeded = subprocess.CompletedProcess([], 0, '{}', '')
+    succeeded = subprocess.CompletedProcess([], 0, model_response, '')
     with patch.object(c, 'MEM0_CONFIG', target), \
+            patch.object(c, 'select_model', side_effect=lambda url, kind: ('http://server/v1', 'served-' + kind)), \
             patch('builtins.input', side_effect=['', 'https://working.example/v1/chat/completions', '']), \
             patch.object(c.subprocess, 'run', side_effect=[
                 failed, succeeded,
-                subprocess.CompletedProcess([], 0, '{"data":[{"embedding":[0.1]}]}', '')]), \
+                subprocess.CompletedProcess([], 0, model_response, '')]), \
             contextlib.redirect_stdout(io.StringIO()) as output:
         c.mem0_settings()
     mem0 = json.loads(target.read_text())
@@ -315,12 +321,13 @@ with tempfile.TemporaryDirectory() as tmp:
         'embedding_api_url': 'http://embedding.example/v1/chat/embedding',
     }))
     with patch.object(c, 'MEM0_CONFIG', target), \
+            patch.object(c, 'select_model', side_effect=lambda url, kind: ('http://server/v1', 'served-' + kind)), \
             patch('builtins.input', side_effect=[
                 '', 'http://embedding.example/v1/chat/embedding',
                 'http://embedding.example/v1/embeddings']), \
             patch.object(c.subprocess, 'run', side_effect=[
-                subprocess.CompletedProcess([], 0, '{}', ''),
-                subprocess.CompletedProcess([], 0, '{"data":[{"embedding":[0.1]}]}', '')]):
+                subprocess.CompletedProcess([], 0, model_response, ''),
+                subprocess.CompletedProcess([], 0, model_response, '')]):
         c.mem0_settings()
     mem0 = json.loads(target.read_text())
     assert mem0['embedding_api_url'] == 'http://embedding.example/v1/embeddings'

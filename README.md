@@ -160,6 +160,16 @@ Codex CLI와 IDE 확장은 같은 MCP 설정을 공유합니다.
 
 ## Mem0
 
+설정에는 chat completion과 embedding API URL만 입력합니다. 설정 검사와 실제
+호출은 LM Studio의 모델 목록에서 종류별로 현재 로드된 모델을 선택하며,
+모델이 여러 개면 서버 목록의 첫 번째 로드된 인스턴스를 사용합니다.
+다운로드만 된 모델은 자동으로 로드하지 않습니다. Chat 모델을 교체하면 다음
+Mem0 호출부터 새 모델을 사용합니다. 설정 검사는 실제 chat 응답과 embedding
+벡터를 확인합니다. 기존 `CODEX_MEMORIES`와의 호환성을 위해 embedding은
+동일 모델과 1024차원을 유지해야 합니다. 추론 모델은 Mem0의 JSON schema
+출력도 지원해야 합니다. 모델 조회는 `/api/v1/models`, 구버전은
+`/api/v0/models`를 사용하므로 해당 경로도 API 서버에서 접근 가능해야 합니다.
+
 신뢰한 hook은 세션 종료 후 사용자 요청마다 Codex의 진행 내용,
 명령·MCP 결과와 최종 응답을 읽습니다. 새 사용자 요청마다 문제/증상, 실제 조치,
 관찰된 결과를 별도 vector 기억으로 삽입합니다. 전체 작업의 성공·실패·미해결을
@@ -218,5 +228,6 @@ MCP 서버에는 `HEADROOM_MODE=token`과 `HEADROOM_SAVINGS_PROFILE=balanced`를
 ~/.codex/toolkit/venv/bin/python check_graft.py
 ~/.codex/toolkit/venv/bin/python check_mem0_session.py
 ~/.codex/toolkit/venv/bin/python check_mem0_tasks.py
+~/.codex/toolkit/venv/bin/python check_model_api.py
 ~/.codex/toolkit/venv/bin/python mem0_import/check_import_memories.py
 ```
