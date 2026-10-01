@@ -204,7 +204,7 @@ choice.message.content = json.dumps({'tasks': [{
     'problem': '배포 실패', 'actions': '로그 확인 후 태그 수정',
     'result': '배포가 정상 상태임을 확인'}]})
 assert mem0_mcp.extract_task_records(store, [{'role': 'user', 'content': '두 작업'}]) == [
-    {'text': '문제/증상: 배포 실패\n조치: 로그 확인 후 태그 수정\n결과: 배포가 정상 상태임을 확인'},
+    {'text': '배포 실패\n로그 확인 후 태그 수정\n배포가 정상 상태임을 확인'},
 ]
 choice.message.content = json.dumps({'tasks': [{
     'problem': '배포 실패', 'actions': '조사', 'result': ''}]})
