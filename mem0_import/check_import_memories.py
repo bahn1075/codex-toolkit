@@ -110,7 +110,7 @@ with tempfile.TemporaryDirectory() as tmp:
     store = TaskStore()
     seen = []
 
-    def extract(_store, messages, previous=None):
+    def extract(_store, messages, previous=None, **kwargs):
         seen.append((messages, previous))
         first = messages[0]['content']
         if first == '그 태그를 고쳐줘':
@@ -148,7 +148,7 @@ with tempfile.TemporaryDirectory() as tmp:
     transcript.write_text(''.join(json.dumps(event) + '\n' for event in events))
     store = TaskStore()
 
-    def extract(_store, messages, previous=None):
+    def extract(_store, messages, previous=None, **kwargs):
         task = messages[0]['content']
         return [{'text': f'progress through {task}'}]
 

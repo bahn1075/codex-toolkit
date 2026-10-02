@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory() as tmp:
     event('agent_message', 'Hidden progress', phase='commentary')
     event('agent_message', 'Confirmed Oracle.', phase='final_answer')
     with patch.object(s, 'STATE', state), patch.object(s, 'HOME', home), \
-            patch.object(s, 'extract_task_memories', side_effect=lambda store, messages, previous=None: [{
+            patch.object(s, 'extract_task_memories', side_effect=lambda store, messages, previous=None, **kwargs: [{
                 'text': messages[0]['content'] + ' ' + messages[-1]['content'],
                 'continuation': False}]) as extract:
         s.process_job(queue(), lambda: store)

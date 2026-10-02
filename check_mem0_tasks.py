@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory() as tmp:
     store = Store()
     seen = []
 
-    def extract(_store, messages, previous=None):
+    def extract(_store, messages, previous=None, **kwargs):
         seen.append(messages)
         return [{'text': f'문제: {messages[0]["content"]} 조치 및 결과: {messages[-1]["content"]}'}]
 
@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory() as tmp:
     store = Store()
     seen = []
 
-    def extract(_store, messages, previous=None):
+    def extract(_store, messages, previous=None, **kwargs):
         seen.append((messages, previous))
         return [{'text': messages[0]['content'] + ': ' + messages[-1]['content']}]
 
@@ -147,7 +147,7 @@ with tempfile.TemporaryDirectory() as tmp:
     store = Store()
     observed_previous = []
 
-    def extract_continued(_store, messages, previous=None):
+    def extract_continued(_store, messages, previous=None, **kwargs):
         observed_previous.append(previous)
         if previous:
             return [{'text': '문제/증상: 태그 수정 요청\n조치: 태그 수정\n결과: 배포 성공 검증'}]
@@ -221,7 +221,7 @@ try:
 except ValueError:
     pass
 
-with patch.object(mem0_mcp, 'extract_facts', side_effect=lambda store, messages, prompt: [
+with patch.object(mem0_mcp, 'extract_facts', side_effect=lambda store, messages, prompt, **kwargs: [
         '문제와 조치가 이어진다']) as summarize, \
         patch.object(mem0_mcp, 'extract_task_records', return_value=[
             {'text': '완료된 작업'}]) as finish:
@@ -270,17 +270,176 @@ assert 'hunter2' not in session_import.redact(secret)
 assert 'topsecret' not in session_import.redact(secret)
 print('PASS: JSON-shaped credentials are redacted before inference.')
 
-def growing_summary(_store, messages, _prompt):
-    previous = json.loads(messages[0]['content'])['prior_evidence']
-    return previous + ['e' * 2500]
+def summary_store():
+    store = MagicMock()
+    store.llm.config.lmstudio_response_format = {'type': 'json_schema', 'json_schema': {
+        'name': 'mem0_facts', 'schema': {'type': 'object', 'properties': {'memory': {
+            'type': 'array', 'items': {'type': 'object', 'properties': {'text': {'type': 'string'}}}}}}}}
+    return store
 
-with patch.object(mem0_mcp, 'extract_facts', side_effect=growing_summary), \
-        patch.object(mem0_mcp, 'extract_task_records', return_value=[
-            {'text': '긴 작업 결과'}]) as finish:
+store = summary_store()
+create = store.llm.client.with_options.return_value.chat.completions.create
+create.return_value = SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop',
+    message=SimpleNamespace(content=json.dumps({'memory': [{'text': 'x' * 3001}]}),
+                            model_extra={}))], usage=None)
+try:
+    session_import.extract_task_memories(store, [{'role': 'user', 'content': 'a' * 16000}])
+    raise AssertionError('Oversized evidence must not be clipped and accepted')
+except mem0_mcp.ExtractionLimitError as error:
+    assert error.details['reason'] == 'summary_size'
+assert create.call_count == 4  # Stop after 12000, 6000, 3000 and 1500 characters.
+print('PASS: oversized summaries are rejected with bounded retries instead of silent clipping.')
+
+# Removing the length fallback must leave this real extraction unable to finish.
+store = summary_store()
+create = store.llm.client.with_options.return_value.chat.completions.create
+calls = []
+def limited_response(**kwargs):
+    data = json.loads(kwargs['messages'][1]['content'])
+    events = json.loads(data[0]['content'])['events']
+    text = ''.join(event['content'] for event in events)
+    calls.append(text)
+    if len(text) > 6000:
+        return SimpleNamespace(choices=[SimpleNamespace(finish_reason='length')],
+                               usage=SimpleNamespace(completion_tokens=4095))
+    return SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop',
+        message=SimpleNamespace(content=json.dumps({'memory': [{'text': text[:20]}]}),
+                                model_extra={}))], usage=None)
+create.side_effect = limited_response
+with patch.object(mem0_mcp, 'extract_task_records', return_value=[{'text': '복구 완료'}]):
     assert session_import.extract_task_memories(store, [
-        {'role': 'user', 'content': '긴 작업 ' * 4500},
-        {'role': 'final', 'content': '검증 완료'}]) == [
-            {'text': '긴 작업 결과'}]
-    assert len(finish.call_args.args[1][0]['content']) <= session_import.MAX_TEXT // 2
+        {'role': 'user', 'content': 'a' * 12000 + 'b' * 4000}]) == [{'text': '복구 완료'}]
+assert ''.join(text for text in calls if len(text) <= 6000) == 'a' * 12000 + 'b' * 4000
+print('PASS: truncated inference splits input without dropping or duplicating evidence.')
 
-print('PASS: growing evidence remains bounded across a long task.')
+# A later network failure must preserve successful summaries for the next run.
+with tempfile.TemporaryDirectory() as tmp:
+    progress = Path(tmp) / 'summary.json'
+    store = summary_store()
+    create = store.llm.client.with_options.return_value.chat.completions.create
+    calls = []
+    def resumable_response(**kwargs):
+        data = json.loads(kwargs['messages'][1]['content'])
+        text = ''.join(event['content'] for event in json.loads(data[0]['content'])['events'])
+        calls.append(text)
+        if text.startswith('b') and calls.count(text) == 1:
+            raise ConnectionError('offline')
+        return SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop',
+            message=SimpleNamespace(content=json.dumps({'memory': [{'text': '근거 ' + text[0]}]}),
+                                    model_extra={}))], usage=None)
+    create.side_effect = resumable_response
+    messages = [{'role': 'user', 'content': 'a' * 12000 + 'b' * 4000}]
+    with patch.object(mem0_mcp, 'extract_task_records', return_value=[{'text': '재개 완료'}]):
+        try:
+            session_import.extract_task_memories(store, messages, progress_path=progress)
+            raise AssertionError('Expected outage')
+        except ConnectionError:
+            pass
+        assert progress.exists() and progress.stat().st_mode & 0o777 == 0o600
+        assert session_import.extract_task_memories(store, messages,
+                                                   progress_path=progress) == [{'text': '재개 완료'}]
+        assert calls.count('a' * 12000) == 1
+        try:
+            session_import.extract_task_memories(store, [{'role': 'user', 'content': 'changed' * 3000}],
+                                               progress_path=progress)
+            raise AssertionError('Changed evidence must not reuse a summary')
+        except ValueError:
+            pass
+print('PASS: successful summaries survive outages and reject changed source evidence.')
+
+store = MagicMock()
+create = store.llm.client.with_options.return_value.chat.completions.create
+create.side_effect = [SimpleNamespace(choices=[SimpleNamespace(finish_reason='length')],
+                                     usage=SimpleNamespace(completion_tokens=4095)),
+                      task_response('작업 요청', '작업을 수행했다', '검증했다')]
+assert mem0_mcp.extract_task_records(store, [{'role': 'user', 'content': '작업'}]) == [
+    {'text': '작업 요청\n작업을 수행했다\n검증했다'}]
+print('PASS: a truncated final record is regenerated as a shorter complete record.')
+
+store = MagicMock()
+create = store.llm.client.with_options.return_value.chat.completions.create
+create.side_effect = [task_response('가' * 1001, '작업했다', '검증했다'),
+                      task_response('작업 요청', '작업했다', '검증했다')]
+assert mem0_mcp.extract_task_records(store, []) == [{'text': '작업 요청\n작업했다\n검증했다'}]
+create.side_effect = None
+create.return_value = task_response('가' * 1001, '작업했다', '검증했다')
+try:
+    mem0_mcp.extract_task_records(store, [])
+    raise AssertionError('Oversized final records must not be stored')
+except mem0_mcp.ExtractionLimitError as error:
+    assert error.details['reason'] == 'record_size'
+print('PASS: providers ignoring field limits cannot store oversized final records.')
+
+store = summary_store()
+store.llm.client.with_options.return_value.chat.completions.create.return_value = SimpleNamespace(
+    choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+        content='{"memory": []}', model_extra={}))], usage=None)
+try:
+    mem0_mcp.extract_facts(store, [{'role': 'user', 'content': '관찰된 근거'}], max_chars=3000)
+    raise AssertionError('Empty rolling summaries must not erase prior evidence')
+except ValueError:
+    pass
+print('PASS: empty bounded summaries cannot erase prior evidence.')
+
+# The constrained response must have room to rewrite actions/results together;
+# a capped list otherwise fills with early facts and freezes later evidence out.
+store = summary_store()
+def single_summary_response(**kwargs):
+    schema = kwargs['response_format']['json_schema']['schema']['properties']['memory']
+    assert schema['maxItems'] == 1
+    assert schema['items']['properties']['text']['maxLength'] == 3000
+    return SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+        content='{"memory": [{"text": "요청과 최신 조치·검증 결과를 함께 갱신했다"}]}',
+        model_extra={}))], usage=None)
+store.llm.client.with_options.return_value.chat.completions.create.side_effect = single_summary_response
+assert mem0_mcp.extract_facts(store, [], max_chars=3000) == ['요청과 최신 조치·검증 결과를 함께 갱신했다']
+print('PASS: bounded evidence is one rewritable summary, not a saturated fact list.')
+
+store = summary_store()
+store.llm.client.with_options.return_value.chat.completions.create.return_value = SimpleNamespace(
+    choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+        content='{"memory": [{"text": "초기 근거"}, {"text": "최신 근거"}]}', model_extra={}))], usage=None)
+try:
+    mem0_mcp.extract_facts(store, [], max_chars=3000)
+    raise AssertionError('A provider must not restore the saturated-list format')
+except ValueError:
+    pass
+print('PASS: bounded evidence rejects providers ignoring the single-summary schema.')
+
+# Long reductions must also split on output limits and retain later evidence.
+store = summary_store()
+def reducing_response(**kwargs):
+    payload = json.loads(kwargs['messages'][1]['content'])
+    events = json.loads(payload[0]['content'])['events']
+    chars = sum(len(event['content']) for event in events)
+    if chars > 6000:
+        return SimpleNamespace(choices=[SimpleNamespace(finish_reason='length')], usage=None)
+    text = '검증 완료 ' + '근' * 1900
+    return SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+        content=json.dumps({'memory': [{'text': text}]}), model_extra={}))], usage=None)
+store.llm.client.with_options.return_value.chat.completions.create.side_effect = reducing_response
+with patch.object(mem0_mcp, 'extract_task_records', return_value=[{'text': '최종 검증 완료'}]) as finish:
+    assert session_import.extract_task_memories(store, [{'role': 'user', 'content': 'x' * 76000}]) == [
+        {'text': '최종 검증 완료'}]
+    assert len(finish.call_args.args[1][0]['content']) <= 12000
+    assert '검증 완료' in finish.call_args.args[1][0]['content']
+print('PASS: long evidence reductions recover from length limits and bound final inference.')
+
+store = summary_store()
+def smallest_reduction_response(**kwargs):
+    payload = json.loads(kwargs['messages'][1]['content'])
+    events = json.loads(payload[0]['content'])['events']
+    chars = sum(len(event['content']) for event in events)
+    if chars > 1500:
+        return SimpleNamespace(choices=[SimpleNamespace(finish_reason='length')], usage=None)
+    cap = kwargs['response_format']['json_schema']['schema']['properties']['memory']['items']['properties']['text']['maxLength']
+    assert cap > 0, 'Reduction must advance through later evidence rather than exhaust its first prefix'
+    text = '근' * min(1900, cap)
+    return SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+        content=json.dumps({'memory': [{'text': text}]}), model_extra={}))], usage=None)
+store.llm.client.with_options.return_value.chat.completions.create.side_effect = smallest_reduction_response
+with patch.object(mem0_mcp, 'extract_task_records', return_value=[{'text': '작은 입력도 복구'}]) as finish:
+    assert session_import.extract_task_memories(store, [{'role': 'user', 'content': 'x' * 16000}]) == [
+        {'text': '작은 입력도 복구'}]
+    assert len(finish.call_args.args[1][0]['content']) <= 12000
+print('PASS: reductions at the smallest retry size advance through all evidence.')
