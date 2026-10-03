@@ -353,6 +353,31 @@ def mem0_settings():
     }, indent=2) + '\n')
 
 
+def configure_mem0_retry(command):
+    """Use the Linux user service manager to resume work after login and outages."""
+    if sys.platform != 'linux' or not shutil.which('systemctl'):
+        return
+    probe = subprocess.run(['systemctl', '--user', 'show-environment'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if probe.returncode:
+        print('Mem0 retry timer unavailable: no systemd user manager; session hooks remain active.')
+        return
+    units = pathlib.Path(os.environ.get('XDG_CONFIG_HOME') or HOME / '.config') / 'systemd/user'
+    log = str(ROOT / 'mem0-sessions/worker.log').replace('%', '%%')
+    write(units / 'codex-mem0-retry.service',
+          '[Unit]\nDescription=Retry queued Codex Mem0 sessions\n'
+          '[Service]\nType=oneshot\nUMask=0077\n'
+          f'ExecStart={command.replace("%", "%%")} --drain\n'
+          f'StandardOutput=append:{log}\nStandardError=append:{log}\n')
+    write(units / 'codex-mem0-retry.timer',
+          '[Unit]\nDescription=Resume Codex Mem0 work after login and connection failures\n'
+          '[Timer]\nOnStartupSec=1min\nOnUnitInactiveSec=2min\n'
+          '[Install]\nWantedBy=timers.target\n')
+    (ROOT / 'mem0-sessions').mkdir(parents=True, exist_ok=True, mode=0o700)
+    subprocess.run(['systemctl', '--user', 'daemon-reload'], check=True)
+    subprocess.run(['systemctl', '--user', 'enable', '--now', 'codex-mem0-retry.timer'], check=True)
+
+
 def configure_mem0_hooks():
     command = shlex.quote(launcher('mem0-session', [sys.executable, str(BUNDLE / 'mem0_session.py')]))
     path = CODEX / 'hooks.json'
@@ -368,6 +393,7 @@ def configure_mem0_hooks():
             group['matcher'] = 'startup|resume'
         groups.append(group)
     write(path, json.dumps(doc, indent=2) + '\n')
+    configure_mem0_retry(command)
 
 
 def remove_claude_mem():

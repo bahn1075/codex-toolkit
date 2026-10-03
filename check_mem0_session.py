@@ -1,5 +1,6 @@
 """Run with ~/.codex/toolkit/venv/bin/python check_mem0_session.py (no network)."""
 import json
+import fcntl
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
@@ -55,10 +56,16 @@ with tempfile.TemporaryDirectory() as tmp:
             assert spawn.call_args.kwargs['start_new_session'] is True
         return next(state.glob('*.job.json'))
 
-    # A session start must not re-run a failed extraction from a prior session.
+    # Startup resumes queued work without model/network calls in the hook.
     with patch.object(s, 'STATE', state), patch.object(s.subprocess, 'Popen') as spawn:
         s.enqueue({'hook_event_name': 'SessionStart'})
-        spawn.assert_not_called()
+        spawn.assert_not_called()  # No queue yet.
+        (state / 'retry.job.json').write_text('{}')
+        s.enqueue({'hook_event_name': 'SessionStart'})
+        assert spawn.called, 'SessionStart must restart pending work'
+        assert spawn.call_args.args[0][-1] == '--drain'
+        assert spawn.call_args.kwargs['start_new_session'] is True
+        (state / 'retry.job.json').unlink()
 
     # A completed turn under the advertised budget needs one model extraction.
     with patch.object(m, 'extract_task_records', return_value=[{'text': 'stored', 'continuation': False}]) as records, \
@@ -148,14 +155,43 @@ with tempfile.TemporaryDirectory() as tmp:
             pass
         assert (state / f'{session}.cursor.json').read_bytes() == old_cursor
 
+    # Timer/hook overlap must exit immediately rather than build a waiting worker queue.
+    with (state / 'worker.lock').open('a') as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with patch.object(s, 'STATE', state), \
+                patch.object(s, 'process_job', side_effect=AssertionError('Concurrent worker')):
+            s.drain()
+
     hooks = home / 'hooks.json'
     hooks.write_text(json.dumps({'hooks': {'SessionEnd': [{'hooks': [{'type': 'command', 'command': 'other'}]}]}}))
-    with patch.object(c, 'CODEX', home), patch.object(c, 'launcher', return_value='/tools/mem0-session'):
+    with patch.object(c, 'CODEX', home), patch.object(c, 'HOME', home), patch.object(c, 'ROOT', home / 'toolkit'), \
+            patch.dict(c.os.environ, XDG_CONFIG_HOME=''), \
+            patch.object(c.sys, 'platform', 'linux'), \
+            patch.object(c.shutil, 'which', return_value='/usr/bin/systemctl'), \
+            patch.object(c.subprocess, 'run') as systemctl, \
+            patch.object(c, 'launcher', return_value='/tools/mem0-session'):
+        systemctl.return_value.returncode = 0
         c.configure_mem0_hooks()
         first = hooks.read_text()
         c.configure_mem0_hooks()
         assert hooks.read_text() == first
         assert json.loads(first)['hooks']['SessionEnd'][0]['hooks'][0]['command'] == 'other'
+        units = home / '.config/systemd/user'
+        assert (units / 'codex-mem0-retry.timer').exists(), 'Install a reboot-safe retry timer'
+        assert 'OnUnitInactiveSec=2min' in (units / 'codex-mem0-retry.timer').read_text()
+        assert 'ExecStart=/tools/mem0-session --drain' in (units / 'codex-mem0-retry.service').read_text()
+        assert systemctl.call_args.args[0][-3:] == ['enable', '--now', 'codex-mem0-retry.timer']
+        custom_config = home / 'custom-config'
+        with patch.dict(c.os.environ, XDG_CONFIG_HOME=str(custom_config)):
+            c.configure_mem0_hooks()
+            assert (custom_config / 'systemd/user/codex-mem0-retry.timer').exists()
+        units_home = home / 'no-user-manager'
+        with patch.object(c, 'HOME', units_home):
+            systemctl.reset_mock()
+            systemctl.return_value.returncode = 1
+            c.configure_mem0_hooks()
+            assert systemctl.call_count == 1, 'Only probe when the user manager is unavailable'
+            assert not (units_home / '.config/systemd/user').exists()
 
 assert 'ctx7sk-' not in s.redact('ctx7sk-' + 'a' * 36)
 assert 'hunter2' not in s.redact('password=hunter2')
