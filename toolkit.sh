@@ -22,9 +22,10 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '\n%s\n' "$*"; }
 usage() {
   cat <<'EOF'
-Usage: bash setup.sh [--resume]
+Usage: bash setup.sh [--resume|--llm]
 Default: archive ~/.codex, reinstall Codex, install/configure toolkit tools and Superpowers.
 --resume: continue/reconcile without resetting config, login or history.
+--llm: validate and save only inference/embedding primary and secondary URLs.
 Close Codex, Codex app and VS Code before running. Do not run with sudo.
 Optional environment settings (first installation):
   CT_HEADROOM_MODE=mcp             Headroom is available only as an MCP tool
@@ -33,6 +34,16 @@ Mem0 uses Oracle AI Vector Search and user-specified inference/embedding APIs. S
 for the Oracle wallet, database username/password, TNS alias, wallet password and model API URLs;
 secrets stay in ~/.codex/mem0.json (mode 600) and are never written to install-state or logs.
 EOF
+}
+configure_llm() {
+  [ "${CODEX_HOME:-$CT_HOME}" = "$CT_HOME" ] || die 'Custom CODEX_HOME detected; this bundle targets ~/.codex.'
+  CT_PY="$CT_ROOT/venv/bin/python"
+  [ -x "$CT_PY" ] && [ -f "$CT_HOME/mem0.json" ] || die 'Existing toolkit and Mem0 configuration required. Run setup.sh first.'
+  command -v curl >/dev/null || die 'curl is required to validate model API URLs.'
+  acquire_lock
+  CT_STAGE=llm-settings
+  "$CT_PY" "$SCRIPT_DIR/configure.py" llm-settings
+  note 'Model API URLs saved. Restart Mem0/Codex to load the settings.'
 }
 preflight() {
   case "$(uname -s)" in Darwin|Linux) ;; *) die 'Only macOS and Linux are supported.' ;; esac
@@ -110,7 +121,7 @@ bootstrap() {
   mkdir -p "$CT_ROOT/bin" "$CT_ROOT/repos" "$CT_ROOT/npm" "$CT_ROOT/logs" "$CT_ROOT/bundle"
   # Keep the installer/update bundle available after the downloaded copy is removed.
   if [ "$SCRIPT_DIR" != "$CT_ROOT/bundle" ]; then
-    for ct_file in setup.sh update.sh toolkit.sh configure.py graft_mcp.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_configure.py check_graft.py check_mem0_session.py check_mem0_tasks.py check_model_api.py; do
+    for ct_file in setup.sh update.sh toolkit.sh configure.py graft_mcp.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_configure.py check_graft.py check_mem0_session.py check_mem0_tasks.py check_model_api.py check_llm.py; do
       cp "$SCRIPT_DIR/$ct_file" "$CT_ROOT/bundle/$ct_file"
     done
     mkdir -p "$CT_ROOT/bundle/mem0_import"

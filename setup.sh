@@ -5,6 +5,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 source "$SCRIPT_DIR/toolkit.sh"
 case "${1:-}" in
   --help|-h) usage; exit 0 ;;
+  --llm) configure_llm; exit 0 ;;
   --resume) RESET=0 ;;
   '') RESET=1 ;;
   *) die "Unknown option: $1" ;;

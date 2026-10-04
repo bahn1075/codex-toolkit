@@ -4,7 +4,14 @@ import json
 import os
 import pathlib
 import re
-from model_api import select_model
+import importlib
+from http.client import RemoteDisconnected
+from urllib.error import HTTPError
+from openai import DefaultHttpxClient
+from model_api import select_model, select_available_model
+
+# Use the HTTP implementation selected by this installed OpenAI SDK (httpx or httpx2).
+httpx = importlib.import_module(DefaultHttpxClient.__mro__[1].__module__.split('.')[0])
 
 os.environ['MEM0_TELEMETRY'] = 'false'
 
@@ -15,11 +22,50 @@ from mem0 import Memory
 CONFIG = pathlib.Path.home() / ".codex" / "mem0.json"
 
 
+class ModelFailoverTransport(httpx.BaseTransport):
+    """Retry only model HTTP requests; never replay Oracle writes."""
+
+    def __init__(self, primary, secondary, kind):
+        self.urls = (primary, secondary)
+        self.kind = kind
+        self.transport = httpx.HTTPTransport()
+
+    def handle_request(self, request):
+        payload = json.loads(request.read())
+        for index, url in enumerate(self.urls):
+            try:
+                _, model = select_model(url, self.kind)
+                headers = dict(request.headers)
+                headers.pop('host', None)
+                headers.pop('content-length', None)
+                forwarded = httpx.Request(request.method, url, headers=headers,
+                    content=json.dumps({**payload, 'model': model}).encode(),
+                    extensions=request.extensions)
+                response = self.transport.handle_request(forwarded)
+                try:
+                    # Mem0 uses non-streaming calls. Read here to catch stalled bodies too.
+                    response.read()
+                finally:
+                    response.close()
+                return response
+            except HTTPError:
+                raise
+            except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError,
+                    OSError, RemoteDisconnected):
+                if index == 1:
+                    raise
+
+    def close(self):
+        self.transport.close()
+
+
 def memory():
     data = json.loads(CONFIG.read_text(encoding="utf-8"))
     try:
-        inference_base_url, inference_model = select_model(data["inference_api_url"], 'llm')
-        embedding_base_url, embedding_model = select_model(data["embedding_api_url"], 'embedding')
+        inference_base_url, inference_model = select_available_model(
+            data["inference_api_url"], data.get("inference_api_url_secondary"), 'llm')
+        embedding_base_url, embedding_model = select_available_model(
+            data["embedding_api_url"], data.get("embedding_api_url_secondary"), 'embedding')
     except KeyError as error:
         raise RuntimeError(
             'Mem0 model API URLs are missing. Run setup.sh --resume to configure them.') from error
@@ -31,7 +77,7 @@ def memory():
     }
     if data.get("wallet_password"):
         connection_params["wallet_password"] = data["wallet_password"]
-    return Memory.from_config({
+    store = Memory.from_config({
         "llm": {"provider": "lmstudio", "config": {
             "model": inference_model, "lmstudio_base_url": inference_base_url,
             "api_key": "local-no-key",
@@ -53,6 +99,18 @@ def memory():
             "connection_params": connection_params,
         }},
     })
+    for key, provider, kind in (
+            ('inference', 'llm', 'llm'), ('embedding', 'embedding_model', 'embedding')):
+        secondary = data.get(key + '_api_url_secondary')
+        if secondary:
+            model_provider = getattr(store, provider)
+            previous = model_provider.client
+            model_provider.client = previous.with_options(
+                http_client=DefaultHttpxClient(transport=ModelFailoverTransport(
+                    data[key + '_api_url'], secondary, kind)),
+                timeout=30, max_retries=0)
+            previous.close()
+    return store
 
 
 mcp = FastMCP("mem0")

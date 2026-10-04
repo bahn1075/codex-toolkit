@@ -1,5 +1,6 @@
 """Select currently loaded LM Studio models without triggering model loading."""
 import json
+from http.client import RemoteDisconnected
 import math
 import re
 from urllib.error import HTTPError
@@ -57,6 +58,18 @@ def select_model(api_url, kind):
             if isinstance(identifier, str) and identifier.strip():
                 return base, identifier
     raise ValueError(f'No loaded {kind} model found. Load one in LM Studio first.')
+
+
+def select_available_model(primary, secondary, kind):
+    """Fall back only when the primary cannot return a model-list response."""
+    try:
+        return select_model(primary, kind)
+    except HTTPError:
+        raise
+    except (OSError, RemoteDisconnected):
+        if not secondary:
+            raise
+        return select_model(secondary, kind)
 
 
 def validate_response(response, kind):

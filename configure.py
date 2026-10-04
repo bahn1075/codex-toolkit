@@ -303,30 +303,36 @@ def mem0_api_url(prompt, example, payload, existing=None, response_kind=None):
         return value
 
 
+def mem0_model_settings(data):
+    """Validate all four URLs before the caller atomically saves settings."""
+    for kind, endpoint, payload in (
+            ('inference', 'chat/completions',
+             {'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 64}),
+            ('embedding', 'embeddings', {'input': 'ping'})):
+        for role in ('primary', 'secondary'):
+            key = kind + '_api_url' + ('_secondary' if role == 'secondary' else '')
+            data[key] = mem0_api_url(
+                f'Mem0 {kind} {role} API URL', f'http://HOST:1234/v1/{endpoint}',
+                payload, data.get(key),
+                response_kind='embedding' if kind == 'embedding' else None)
+    return data
+
+
+def llm_settings():
+    """Update only model URLs in an existing Mem0 configuration."""
+    if not MEM0_CONFIG.is_file():
+        raise RuntimeError('No Mem0 configuration found. Run setup.sh first.')
+    data = mem0_model_settings(json.loads(MEM0_CONFIG.read_text()))
+    write(MEM0_CONFIG, json.dumps(data, indent=2) + '\n')
+
+
 def mem0_settings():
     """Collect persistent Oracle and model API connection settings interactively."""
     if MEM0_CONFIG.exists():
         data = json.loads(MEM0_CONFIG.read_text())
         if 'wallet_password' not in data:
             data['wallet_password'] = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
-        if 'inference_api_url' not in data:
-            data['inference_api_url'] = mem0_api_url(
-                'Mem0 inference API URL', 'http://HOST:1234/v1/chat/completions',
-                {'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 64})
-        else:
-            data['inference_api_url'] = mem0_api_url(
-                'Mem0 inference API URL', 'http://HOST:1234/v1/chat/completions',
-                {'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 64},
-                data['inference_api_url'])
-        if 'embedding_api_url' not in data:
-            data['embedding_api_url'] = mem0_api_url(
-                'Mem0 embedding API URL', 'http://HOST:1234/v1/embeddings',
-                {'input': 'ping'}, response_kind='embedding')
-        else:
-            data['embedding_api_url'] = mem0_api_url(
-                'Mem0 embedding API URL', 'http://HOST:1234/v1/embeddings',
-                {'input': 'ping'}, data['embedding_api_url'],
-                response_kind='embedding')
+        mem0_model_settings(data)
         write(MEM0_CONFIG, json.dumps(data, indent=2) + '\n')
         return
     wallet = pathlib.Path(input('Oracle wallet directory: ').strip()).expanduser()
@@ -336,12 +342,7 @@ def mem0_settings():
     password = getpass('Oracle database password: ')
     alias = input('Oracle TNS alias: ').strip()
     wallet_password = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
-    inference_api_url = mem0_api_url(
-        'Mem0 inference API URL', 'http://HOST:1234/v1/chat/completions',
-        {'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 64})
-    embedding_api_url = mem0_api_url(
-        'Mem0 embedding API URL', 'http://HOST:1234/v1/embeddings',
-        {'input': 'ping'}, response_kind='embedding')
+    model_settings = mem0_model_settings({})
     if not username or not password or not re.fullmatch(r'[A-Za-z0-9_.-]+', alias):
         raise RuntimeError('Username, password and a simple TNS alias are required.')
     if not re.search(rf'(?mi)^\s*{re.escape(alias)}\s*=', (wallet / 'tnsnames.ora').read_text()):
@@ -349,7 +350,7 @@ def mem0_settings():
     write(MEM0_CONFIG, json.dumps({
         'wallet_dir': str(wallet.resolve()), 'username': username,
         'password': password, 'tns_alias': alias, 'wallet_password': wallet_password,
-        'inference_api_url': inference_api_url, 'embedding_api_url': embedding_api_url,
+        **model_settings,
     }, indent=2) + '\n')
 
 
@@ -620,6 +621,7 @@ def main():
     elif cmd == 'verify-graft': verify_graft()
     elif cmd == 'configure': configure()
     elif cmd == 'mem0-settings': mem0_settings()
+    elif cmd == 'llm-settings': llm_settings()
     elif cmd == 'mem0-hooks': configure_mem0_hooks()
     elif cmd == 'remove-claude-mem': remove_claude_mem()
     elif cmd == 'verify-proxy': verify_proxy()

@@ -230,6 +230,20 @@ MCP 서버에는 `HEADROOM_MODE=token`과 `HEADROOM_SAVINGS_PROFILE=balanced`를
   `/mcp`, `/hooks`에서 별도로 확인해야 하며 실제 모델 추론까지 보장하지는 않습니다.
 - Remote SSH나 컨테이너에서는 Codex가 실행되는 원격 환경에도 이 툴킷을 설치해야 합니다.
 
+## 모델 API URL만 재설정
+
+`bash setup.sh --llm`은 기존 toolkit 가상 환경으로 inference primary, inference secondary,
+embedding primary, embedding secondary URL을 순서대로 입력받습니다. 각 URL에서 모델 조회와
+실제 요청을 검증하고, 실패하면 재입력받습니다. 기존값은 Enter로 유지할 수 있습니다.
+네 URL이 모두 검증되면 `~/.codex/mem0.json`의 URL 필드만 저장하며 설치, 로그인,
+Oracle 및 다른 도구 설정은 변경하지 않습니다. 저장 후 Mem0/Codex를 재시작하세요.
+
+Mem0는 매 요청에서 primary를 먼저 사용하고 연결 실패·응답 시간 초과·응답 중 연결 단절 시
+secondary로 재시도합니다. 각 서버에서 현재 로드된 모델을 사용하며 다음 요청은 다시 primary부터
+시도합니다. HTTP 오류 응답과 잘못된 모델 출력은 그대로 오류로 처리합니다.
+기존 단일 URL 설정도 primary로 사용할 수 있습니다. 두 embedding 서버는 기존 기억과 호환되는
+동일한 embedding 모델과 1024차원 벡터를 제공해야 합니다.
+
 ## 개발 검증
 
 설치된 toolkit 가상 환경으로 네트워크 없는 자체 검사를 실행할 수 있습니다.
@@ -240,5 +254,6 @@ MCP 서버에는 `HEADROOM_MODE=token`과 `HEADROOM_SAVINGS_PROFILE=balanced`를
 ~/.codex/toolkit/venv/bin/python check_mem0_session.py
 ~/.codex/toolkit/venv/bin/python check_mem0_tasks.py
 ~/.codex/toolkit/venv/bin/python check_model_api.py
+~/.codex/toolkit/venv/bin/python check_llm.py
 ~/.codex/toolkit/venv/bin/python mem0_import/check_import_memories.py
 ```

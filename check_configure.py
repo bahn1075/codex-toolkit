@@ -254,7 +254,9 @@ with tempfile.TemporaryDirectory() as tmp:
             patch('builtins.input', side_effect=[
                 str(wallet), 'dbuser', 'demo_medium',
                 'http://inference.example/api/v1/chat/completions',
-                'http://embedding.example/api/v1/embedding']), \
+                'http://secondary.example/v1/chat/completions',
+                'http://embedding.example/api/v1/embedding',
+                'http://secondary.example/v1/embeddings']), \
             patch.object(c, 'getpass', side_effect=['secret', 'wallet-secret']), \
             patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess(
                 [], 0, model_response, '')) as curl:
@@ -266,7 +268,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert mem0['inference_api_url'].endswith('/chat/completions')
     assert mem0['embedding_api_url'].endswith('/embedding')
     assert target.stat().st_mode & 0o777 == 0o600
-    assert curl_calls == 2
+    assert curl_calls == 4
 
 with tempfile.TemporaryDirectory() as tmp:
     target = Path(tmp) / 'mem0.json'
@@ -277,7 +279,8 @@ with tempfile.TemporaryDirectory() as tmp:
     }))
     with patch.object(c, 'MEM0_CONFIG', target), \
             patch.object(c, 'select_model', side_effect=lambda url, kind: ('http://server/v1', 'served-' + kind)), \
-            patch('builtins.input', side_effect=['', 'https://new.example/api/v1/embeddings']), \
+            patch('builtins.input', side_effect=['', 'http://secondary.example/v1/chat/completions',
+                'https://new.example/api/v1/embeddings', 'http://secondary.example/v1/embeddings']), \
             patch.object(c.subprocess, 'run', return_value=subprocess.CompletedProcess(
                 [], 0, model_response, '')) as curl, \
             contextlib.redirect_stdout(io.StringIO()) as output:
@@ -289,7 +292,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert 'http://HOST:1234/v1/chat/completions' in output.getvalue()
     assert 'http://HOST:1234/v1/embeddings' in output.getvalue()
     assert output.getvalue().count('기존값을 그대로 사용하시겠습니까?') == 2
-    assert curl_calls == 2
+    assert curl_calls == 4
     assert '입력하신 경로가 정상작동하였습니다. 해당 값으로 확정합니다' in output.getvalue()
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -303,10 +306,10 @@ with tempfile.TemporaryDirectory() as tmp:
     succeeded = subprocess.CompletedProcess([], 0, model_response, '')
     with patch.object(c, 'MEM0_CONFIG', target), \
             patch.object(c, 'select_model', side_effect=lambda url, kind: ('http://server/v1', 'served-' + kind)), \
-            patch('builtins.input', side_effect=['', 'https://working.example/v1/chat/completions', '']), \
+            patch('builtins.input', side_effect=['', 'https://working.example/v1/chat/completions',
+                'http://secondary.example/v1/chat/completions', '', 'http://secondary.example/v1/embeddings']), \
             patch.object(c.subprocess, 'run', side_effect=[
-                failed, succeeded,
-                subprocess.CompletedProcess([], 0, model_response, '')]), \
+                failed, succeeded, succeeded, succeeded, succeeded]), \
             contextlib.redirect_stdout(io.StringIO()) as output:
         c.mem0_settings()
     mem0 = json.loads(target.read_text())
@@ -323,9 +326,12 @@ with tempfile.TemporaryDirectory() as tmp:
     with patch.object(c, 'MEM0_CONFIG', target), \
             patch.object(c, 'select_model', side_effect=lambda url, kind: ('http://server/v1', 'served-' + kind)), \
             patch('builtins.input', side_effect=[
-                '', 'http://embedding.example/v1/chat/embedding',
-                'http://embedding.example/v1/embeddings']), \
+                '', 'http://secondary.example/v1/chat/completions',
+                'http://embedding.example/v1/chat/embedding',
+                'http://embedding.example/v1/embeddings', 'http://secondary.example/v1/embeddings']), \
             patch.object(c.subprocess, 'run', side_effect=[
+                subprocess.CompletedProcess([], 0, model_response, ''),
+                subprocess.CompletedProcess([], 0, model_response, ''),
                 subprocess.CompletedProcess([], 0, model_response, ''),
                 subprocess.CompletedProcess([], 0, model_response, '')]):
         c.mem0_settings()
