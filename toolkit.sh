@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Shared implementation. No sudo, eval, shell-wide package upgrades or hook-trust bypass.
+# Shared implementation. sudo is used only to install missing Linux build tools.
+# No eval, shell-wide package upgrades or hook-trust bypass.
 CT_HOME="$HOME/.codex"
 CT_ROOT="$CT_HOME/toolkit"
 CT_BACKUPS="$HOME/.codex-backups"
@@ -45,6 +46,37 @@ configure_llm() {
   "$CT_PY" "$SCRIPT_DIR/configure.py" llm-settings
   note 'Model API URLs saved. Restart Mem0/Codex to load the settings.'
 }
+build_tools_available() {
+  command -v make >/dev/null \
+    && { command -v cc >/dev/null || command -v gcc >/dev/null; } \
+    && { command -v c++ >/dev/null || command -v g++ >/dev/null; }
+}
+ensure_build_tools() {
+  build_tools_available && return 0
+  if [ "$(uname -s)" = Darwin ]; then
+    die 'C/C++ compiler and make are required. Install Xcode Command Line Tools with xcode-select --install, then rerun setup.sh.'
+  fi
+  command -v sudo >/dev/null || die 'sudo is required to install missing Linux build tools.'
+  note 'Installing missing Linux C/C++ build tools (sudo may request your password).'
+  if command -v apt-get >/dev/null; then
+    sudo apt-get update || die 'Could not refresh apt package indexes.'
+    sudo apt-get install -y build-essential || die 'Could not install build-essential.'
+  elif command -v dnf >/dev/null; then
+    sudo dnf install -y make gcc gcc-c++ || die 'Could not install Linux build tools with dnf.'
+  elif command -v yum >/dev/null; then
+    sudo yum install -y make gcc gcc-c++ || die 'Could not install Linux build tools with yum.'
+  elif command -v pacman >/dev/null; then
+    sudo pacman -S --needed --noconfirm base-devel || die 'Could not install base-devel.'
+  elif command -v zypper >/dev/null; then
+    sudo zypper --non-interactive install make gcc gcc-c++ || die 'Could not install Linux build tools with zypper.'
+  elif command -v apk >/dev/null; then
+    sudo apk add build-base || die 'Could not install build-base.'
+  else
+    die 'No supported Linux package manager found. Install build tools (make and C/C++ compilers), then rerun setup.sh.'
+  fi
+  hash -r
+  build_tools_available || die 'Build tools installation finished, but make or C/C++ compilers are still missing from PATH.'
+}
 preflight() {
   case "$(uname -s)" in Darwin|Linux) ;; *) die 'Only macOS and Linux are supported.' ;; esac
   [ "$(id -u)" != 0 ] || die 'Run as your normal user, not root/sudo.'
@@ -55,11 +87,10 @@ preflight() {
   case "$HOME$SCRIPT_DIR" in *$'\n'*|*$'\r'*) die 'Newlines in paths are unsupported.' ;; esac
   case "$SCRIPT_DIR/" in "$CT_HOME/"*) die 'Extract this bundle outside ~/.codex before setup.' ;; esac
   [ ! -L "$CT_HOME" ] || die '~/.codex is a symlink; resolve its intended target before resetting.'
-  for ct_cmd in brew curl npm node uv git python3 bun; do
+  for ct_cmd in brew curl npm node git python3 bun; do
     command -v "$ct_cmd" >/dev/null || die "Required command missing: $ct_cmd"
   done
   CT_BREW=$(command -v brew)
-  CT_UV=$(command -v uv)
   CT_NPM=$(command -v npm)
   CT_NODE=$(command -v node)
   # Distro npm/node-gyp uses distro headers: do not pair it with an NVM Node binary.
@@ -73,6 +104,13 @@ preflight() {
   if command -v pgrep >/dev/null && pgrep -u "$(id -u)" -x codex >/dev/null 2>&1; then
     die 'A codex process is running. Close Codex/VS Code sessions and run again.'
   fi
+  if ! command -v uv >/dev/null; then
+    note 'Installing missing uv with Homebrew.'
+    "$CT_BREW" install uv || die 'Could not install uv with Homebrew.'
+    hash -r
+  fi
+  CT_UV=$(command -v uv) || die 'uv installation finished, but uv is still missing from PATH.'
+  ensure_build_tools
 }
 acquire_lock() {
   mkdir "$HOME/.codex-toolkit-setup.lock" 2>/dev/null || die 'Setup/update lock exists. Check for an active installer before removing the stale lock.'
@@ -121,7 +159,7 @@ bootstrap() {
   mkdir -p "$CT_ROOT/bin" "$CT_ROOT/repos" "$CT_ROOT/npm" "$CT_ROOT/logs" "$CT_ROOT/bundle"
   # Keep the installer/update bundle available after the downloaded copy is removed.
   if [ "$SCRIPT_DIR" != "$CT_ROOT/bundle" ]; then
-    for ct_file in setup.sh update.sh toolkit.sh configure.py graft_mcp.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_configure.py check_graft.py check_mem0_session.py check_mem0_tasks.py check_model_api.py check_llm.py; do
+    for ct_file in setup.sh update.sh toolkit.sh configure.py graft_mcp.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_preflight.py check_configure.py check_graft.py check_mem0_session.py check_mem0_tasks.py check_model_api.py check_llm.py; do
       cp "$SCRIPT_DIR/$ct_file" "$CT_ROOT/bundle/$ct_file"
     done
     mkdir -p "$CT_ROOT/bundle/mem0_import"

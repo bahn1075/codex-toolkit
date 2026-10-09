@@ -23,9 +23,15 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 > 프로젝트 안의 `.codex/config.toml`과 `AGENTS.md`는 건드리지 않습니다.
 
 - 지원 환경: macOS 또는 Linux, Bash 3.2 이상
-- 사전 명령: Homebrew, curl, Node.js 22 이상, npm, uv, git, python3, Bun
-- Graft 빌드 도구: C/C++ 컴파일러와 make(macOS는 Xcode Command Line Tools)
-- 설치 디렉터리는 `~/.codex` 밖에 두고 일반 사용자로 실행합니다. `sudo`를 쓰지 마세요.
+- 사전 명령: Homebrew, curl, Node.js 22 이상, npm, git, python3, Bun
+- 시작 점검에서 `uv`가 없으면 Homebrew로 자동 설치합니다.
+- Graft 빌드 도구인 make 또는 C/C++ 컴파일러가 없으면 Linux 패키지 관리자로
+  자동 설치합니다. Ubuntu/Debian/WSL에서는 `build-essential`을 설치하며,
+  dnf, yum, pacman, zypper, apk도 지원합니다. `uv`와 빌드 도구가 모두 없으면 둘 다 설치합니다.
+  macOS에서는 Xcode Command Line Tools를 미리 설치하세요(`xcode-select --install`).
+- 설치 디렉터리는 `~/.codex` 밖에 두고 일반 사용자로 실행합니다. 스크립트 전체를
+  `sudo`로 실행하지 마세요. Linux 빌드 도구 자동 설치 단계에서만 `sudo`를 사용하며
+  비밀번호를 요구할 수 있습니다. 설치 후 명령을 다시 점검하며 실패하면 중단합니다.
 - 실행 중인 Codex CLI, Codex 앱, VS Code를 모두 종료하세요.
 
 ## 셸 스크립트 사용법
@@ -249,6 +255,7 @@ secondary로 재시도합니다. 각 서버에서 현재 로드된 모델을 사
 설치된 toolkit 가상 환경으로 네트워크 없는 자체 검사를 실행할 수 있습니다.
 
 ```bash
+python3 check_preflight.py
 ~/.codex/toolkit/venv/bin/python check_configure.py
 ~/.codex/toolkit/venv/bin/python check_graft.py
 ~/.codex/toolkit/venv/bin/python check_mem0_session.py
