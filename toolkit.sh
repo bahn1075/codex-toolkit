@@ -159,7 +159,7 @@ bootstrap() {
   mkdir -p "$CT_ROOT/bin" "$CT_ROOT/repos" "$CT_ROOT/npm" "$CT_ROOT/logs" "$CT_ROOT/bundle"
   # Keep the installer/update bundle available after the downloaded copy is removed.
   if [ "$SCRIPT_DIR" != "$CT_ROOT/bundle" ]; then
-    for ct_file in setup.sh update.sh toolkit.sh configure.py graft_mcp.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_preflight.py check_configure.py check_graft.py check_mem0_session.py check_mem0_tasks.py check_model_api.py check_llm.py; do
+    for ct_file in setup.sh update.sh toolkit.sh configure.py headroom_setup.py graft_mcp.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_headroom.py check_preflight.py check_configure.py check_graft.py check_mem0_session.py check_mem0_tasks.py check_model_api.py check_llm.py; do
       cp "$SCRIPT_DIR/$ct_file" "$CT_ROOT/bundle/$ct_file"
     done
     mkdir -p "$CT_ROOT/bundle/mem0_import"
@@ -195,7 +195,8 @@ install_packages() {
   install_codex
   # Official Python packages; isolated from the user's other uv tools.
   "$CT_UV" tool install --upgrade --python "$CT_BOOT_PY" serena-agent
-  "$CT_UV" tool install --upgrade --python "$CT_BOOT_PY" 'headroom-ai[all]'
+  ct_headroom_hardware=$("$CT_PY" "$SCRIPT_DIR/headroom_setup.py" install "$CT_BOOT_PY" "$CT_UV" "$CT_ROOT")
+  "$CT_PY" "$SCRIPT_DIR/configure.py" headroom-hardware "$ct_headroom_hardware"
   # Oracle AI Vector Search support is not yet in the PyPI 1.0.11 release.
   "$CT_UV" pip install --python "$CT_ROOT/venv/bin/python" --upgrade \
     'mem0ai @ git+https://github.com/mem0ai/mem0.git@c7ee362aff94a369af70f13f2b4f853f6793ff4c' \

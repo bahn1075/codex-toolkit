@@ -226,7 +226,38 @@ tail -f ~/.codex/toolkit/mem0-sessions/manual-import-errors.*
 Headroom은 MCP 도구로만 사용합니다. `setup.sh`와 `setup.sh --resume`은 기존
 Headroom 상주 프록시와 Codex provider 리디렉션을 제거해 OpenAI 직접 연결을 유지하고,
 MCP 서버에는 `HEADROOM_MODE=token`과 `HEADROOM_SAVINGS_PROFILE=balanced`를 설정합니다.
+큰 로그·검색·JSON 결과는 가능하면 도구 호출 안에서 Headroom으로 압축한 뒤 압축 결과와
+복원 hash만 Codex에 반환하도록 전역 정책을 설치합니다. 등록만으로 자동 압축되지는 않습니다.
+`headroom_read`도 활성화하여 변경 없는 반복 파일 읽기는 캐시 marker로 처리합니다.
+정확한 원문·편집·인용에는 `headroom_retrieve`, 변경 후 읽기에는 `fresh=true`를 사용합니다.
+
+설치와 업데이트는 OS/아키텍처 및 Linux PCI의 GPU 제조사를 감지합니다.
+기본 패키지는 `headroom-ai[mcp,code]`, ONNX Runtime, tokenizer용 Transformers이며,
+CPU 및 Apple 환경에는 PyTorch/CUDA를 설치하지 않습니다.
+
+| 감지한 환경 | 설치 및 압축 backend |
+|---|---|
+| Apple Silicon macOS | ONNX CoreML, 실패하면 ONNX CPU |
+| Linux AMD / NVIDIA | uv의 자동 호환성 감지 후 해당 ROCm / CUDA PyTorch만 설치 |
+| Intel GPU | 제조사는 감지하지만 Headroom의 XPU backend 미지원으로 ONNX CPU |
+| GPU 없음 / 드라이버 미지원 / 감지 실패 | ONNX CPU |
+
+GPU 설치나 실제 연산 검증에 실패하면 GPU 의존성을 제외하고 CPU 환경으로 다시 설치합니다.
+매번 환경을 재구성하여 이전 `[all]`의 불필요한 의존성을 남기지 않습니다.
+선택 결과는 `install-state.json`의 `headroom_hardware`에 기록하며,
+설치 중 실제 ML 추론, MCP 압축·정확한 원문 복원, 읽기 캐시를 검증합니다.
+모델이 캐시에 없으면 첫 검증에서 Hugging Face 다운로드가 필요합니다.
+uv의 `tool install --torch-backend` 지원이 필요합니다. GPU 감지 실패는 CPU로 처리하며,
+OS GPU 드라이버 자체는 설치하거나 변경하지 않습니다.
 설치 마지막 단계는 활성 MCP의 handshake 및 `codex mcp list`를 실행한 뒤 최종 상태를 출력합니다.
+
+설치된 Headroom의 실제 동작만 재검사하려면 다음을 실행하세요.
+backend는 `install-state.json`에 기록된 값(`onnx_cpu`, `onnx_coreml`, `pytorch`)을 사용하고,
+PyTorch 환경의 마지막 인자는 기록된 `torch_backend`로 바꿉니다.
+
+```bash
+~/.codex/toolkit/uv-tools/headroom-ai/bin/python ~/.codex/toolkit/bundle/headroom_setup.py verify onnx_cpu cpu
+```
 
 ## 알아둘 점
 
@@ -256,6 +287,7 @@ secondary로 재시도합니다. 각 서버에서 현재 로드된 모델을 사
 
 ```bash
 python3 check_preflight.py
+~/.codex/toolkit/venv/bin/python -m unittest check_headroom
 ~/.codex/toolkit/venv/bin/python check_configure.py
 ~/.codex/toolkit/venv/bin/python check_graft.py
 ~/.codex/toolkit/venv/bin/python check_mem0_session.py

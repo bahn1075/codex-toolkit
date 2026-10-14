@@ -176,7 +176,8 @@ def configure():
         'serena': (str(ROOT / 'bin/serena'), ['start-mcp-server', '--context=codex',
             '--enable-web-dashboard=false', '--open-web-dashboard=false']),
         'graft': (graft_launch, []),
-        'headroom': (str(ROOT / 'bin/headroom'), ['mcp', 'serve']),
+        'headroom': (launcher('headroom-mcp', [str(ROOT / 'uv-tools/headroom-ai/bin/python'),
+            str(BUNDLE / 'headroom_setup.py'), 'serve']), []),
         'mem0': (launcher('mem0-mcp', [sys.executable, str(BUNDLE / 'mem0_mcp.py')]), []),
     }
     for name, (command, args) in specs.items():
@@ -196,6 +197,8 @@ def configure():
         if name == 'headroom':
             env['HEADROOM_MODE'] = 'token'
             env['HEADROOM_SAVINGS_PROFILE'] = 'balanced'
+            env['HEADROOM_MCP_READ'] = 'on'
+            env['HEADROOM_KOMPRESS_BACKEND'] = state.get('headroom_hardware', {}).get('backend', 'onnx_cpu')
     save_config(doc)
     state['graft_auto_start'] = True
     save_state(state)
@@ -490,7 +493,8 @@ def final_status():
     for name in ['serena', 'graft', 'headroom', 'mem0']:
         enabled = doc['mcp_servers'][name].get('enabled', True)
         print(f"MCP {name}: {'enabled' if enabled else 'disabled'}")
-    print('Headroom: MCP-only, token mode, balanced profile.')
+    hardware = read_state().get('headroom_hardware', {})
+    print(f"Headroom: MCP-only, token mode, balanced profile; backend={hardware.get('backend', 'onnx_cpu')}, read cache enabled.")
     print('Excluded MCPs: kubernetes, context7.')
 
 
@@ -588,6 +592,18 @@ def doctor():
         except Exception as exc:
             print(f'FAIL {name}: {type(exc).__name__}: {exc}')
             failures += 1
+    headroom = config().get('mcp_servers', {}).get('headroom', {})
+    if headroom.get('enabled', True) and (BUNDLE / 'headroom_setup.py').exists():
+        hardware = read_state().get('headroom_hardware', {})
+        try:
+            subprocess.run([str(ROOT / 'uv-tools/headroom-ai/bin/python'),
+                str(BUNDLE / 'headroom_setup.py'), 'verify',
+                hardware.get('backend', 'onnx_cpu'), hardware.get('torch_backend') or 'cpu'],
+                check=True, timeout=300, env=dict(os.environ, **headroom.get('env', {})))
+            print('PASS Headroom: real ML inference, MCP compression/retrieval and read cache.')
+        except (subprocess.SubprocessError, OSError) as exc:
+            print(f'FAIL Headroom execution: {exc}')
+            failures += 1
     print('Plugin-bundled MCP/hook status must also be checked with Codex /mcp and /hooks.')
     if read_state().get('headroom_runtime') == 'configured':
         try:
@@ -617,6 +633,10 @@ def main():
         save_state(state)
     elif cmd == 'status':
         state = read_state(); state[args[0]] = args[1]; save_state(state)
+    elif cmd == 'headroom-hardware':
+        state = read_state()
+        state['headroom_hardware'] = json.loads(args[0])
+        save_state(state)
     elif cmd == 'npm-policy': npm_policy()
     elif cmd == 'verify-graft': verify_graft()
     elif cmd == 'configure': configure()

@@ -61,6 +61,8 @@ def check_configure(existing, state=None):
     assert set(restored['mcp_servers']) == {'serena', 'graft', 'headroom', 'mem0'}
     assert restored['mcp_servers']['headroom']['env']['HEADROOM_MODE'] == 'token'
     assert restored['mcp_servers']['headroom']['env']['HEADROOM_SAVINGS_PROFILE'] == 'balanced'
+    assert restored['mcp_servers']['headroom']['env']['HEADROOM_MCP_READ'] == 'on'
+    assert restored['mcp_servers']['headroom']['env']['HEADROOM_KOMPRESS_BACKEND'] == (state or {}).get('headroom_hardware', {}).get('backend', 'onnx_cpu')
     assert restored['tui']['status_line_use_colors'] is True
     assert restored['mcp_servers']['graft']['env']['PATH'].split(c.os.pathsep)[0] == '/selected'
     assert restored['features']['hooks'] is True
@@ -74,6 +76,8 @@ doc = check_configure('[features]\ncodex_hooks = true\nother = false\n')
 assert doc['features']['other'] is False
 assert doc['mcp_servers']['graft']['enabled'] is True
 doc = check_configure(tomlkit.dumps(doc))
+for backend in ('onnx_coreml', 'pytorch'):
+    check_configure(tomlkit.dumps(doc), {'headroom_hardware': {'backend': backend}})
 assert doc['mcp_servers']['graft']['enabled'] is True
 doc = check_configure('[mcp_servers.graft]\nenabled = true\ntool_timeout_sec = 42\n')
 assert doc['mcp_servers']['graft']['enabled'] is True
@@ -154,7 +158,7 @@ assert output.getvalue().splitlines() == [
     'MCP graft: disabled',
     'MCP headroom: enabled',
     'MCP mem0: enabled',
-    'Headroom: MCP-only, token mode, balanced profile.',
+    'Headroom: MCP-only, token mode, balanced profile; backend=onnx_cpu, read cache enabled.',
     'Excluded MCPs: kubernetes, context7.',
 ]
 with patch.object(c, 'config', return_value=status_doc), \

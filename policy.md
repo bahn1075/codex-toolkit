@@ -42,12 +42,29 @@ Do not store secrets in notes. Respect explicit user requests not to retain data
 
 ## Headroom
 
-Headroom runs as an MCP-only tool server in token mode with the balanced
-profile. Use its compression/retrieval tools where useful; use retrieval for
-exact originals when required. Registering it does not intercept other tools'
-results, and passing an already-read giant result to a compression tool does
-not recover the input tokens already spent.
-Do not infer a token saving percentage from installation alone.
+Actively use Headroom, rather than merely registering it. It runs as an MCP-only
+tool server in token mode with the balanced profile; it does not automatically
+intercept other tools' output.
+
+Before returning a bulk result to the conversation (large logs, search results,
+directory listings, JSON, or whole-file reads; normally over 8,000 characters),
+call headroom_compress. When tool orchestration is available, keep the raw result
+inside the orchestration call, pass it directly to Headroom, and return only the
+compressed result and retrieval hash. Do not print the raw result first. Reuse
+Serena/Graft's small targeted results when they already answer the question.
+
+Discover and prefer headroom_read for file reads and repeated reads when available.
+Its first read returns the file; unchanged repeat reads return cache markers.
+Use headroom_retrieve for exact source, edits, quotations, or details omitted by
+compression; request a fresh read after edits or context compaction. Never treat
+a compressed summary as proof of exact contents or complete test output.
+
+Check headroom_stats at the start and end of substantial work that uses Headroom.
+Report measured compression counts/tokens saved when relevant, distinguishing
+tool estimates from actual billed savings. If Headroom fails, state the failure
+and return a bounded raw excerpt so the task can continue. Skip compression for
+small outputs, secrets, and already compressed results. Sending an already-read
+result to Headroom cannot recover input tokens already spent.
 
 ## Instruction boundary
 
