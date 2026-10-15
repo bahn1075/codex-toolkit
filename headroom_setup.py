@@ -81,8 +81,14 @@ def initialize_runtime():
     # Preserve the CLI's settings precedence and OS/additive certificate trust.
     from headroom import settings_store
     settings_store.apply_to_environ(settings_store.load())
-    from headroom.proxy.ssl_context import ensure_process_trust
+    from headroom.proxy.ssl_context import build_httpx_verify, ensure_process_trust
     ensure_process_trust()
+    from huggingface_hub import set_client_factory
+    from huggingface_hub.utils import _http
+    # HF creates its own TLS context; share Headroom trust without dropping HF's offline hook.
+    set_client_factory(lambda: _http.httpx.Client(verify=build_httpx_verify(),
+        event_hooks={'request': [_http.hf_request_event_hook]},
+        follow_redirects=True, timeout=None))
 
 
 async def verify(backend, torch_backend):

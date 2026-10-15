@@ -1,5 +1,6 @@
 """Run with toolkit/venv/bin/python -m unittest check_headroom."""
 import pathlib
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -19,10 +20,25 @@ class HeadroomTests(unittest.TestCase):
         calls = []
         settings = SimpleNamespace(load=lambda: {'setting': 'value'},
             apply_to_environ=lambda values: calls.append(('settings', values)))
-        tls = SimpleNamespace(ensure_process_trust=lambda: calls.append(('tls',)))
+        factories = []
+        context = ssl.create_default_context()
+        tls = SimpleNamespace(ensure_process_trust=lambda: calls.append(('tls',)),
+                              build_httpx_verify=lambda: context)
+        import httpx
+        hook = lambda request: None
+        hf_http = SimpleNamespace(httpx=httpx, hf_request_event_hook=hook)
         with patch.dict(sys.modules, {'headroom': SimpleNamespace(settings_store=settings),
-                                     'headroom.proxy.ssl_context': tls}):
+                'headroom.proxy.ssl_context': tls,
+                'huggingface_hub': SimpleNamespace(set_client_factory=factories.append),
+                'huggingface_hub.utils': SimpleNamespace(_http=hf_http)}):
             h.initialize_runtime()
+            self.assertEqual(len(factories), 1, 'Model downloads did not receive Headroom TLS settings')
+            with factories[0]() as client:
+                self.assertIs(client._transport._pool._ssl_context, context)
+                self.assertTrue(client.follow_redirects)
+                self.assertEqual(client.event_hooks['request'], [hook])
+                self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+                self.assertTrue(context.check_hostname)
         self.assertEqual(calls, [('settings', {'setting': 'value'}), ('tls',)])
 
     def test_hardware_plans_only_install_usable_accelerators(self):

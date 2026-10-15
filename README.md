@@ -247,6 +247,9 @@ GPU 설치나 실제 연산 검증에 실패하면 GPU 의존성을 제외하고
 선택 결과는 `install-state.json`의 `headroom_hardware`에 기록하며,
 설치 중 실제 ML 추론, MCP 압축·정확한 원문 복원, 읽기 캐시를 검증합니다.
 모델이 캐시에 없으면 첫 검증에서 Hugging Face 다운로드가 필요합니다.
+모델 다운로드에도 Headroom의 OS 인증서 저장소·사용자 CA 설정을 적용합니다.
+WSL의 사내 TLS 검사 환경에서도 CA가 WSL에 신뢰 등록되어 있어야 하며,
+Hugging Face 클라이언트는 인증서 검증과 offline 모드 검사를 유지합니다.
 uv의 `tool install --torch-backend` 지원이 필요합니다. GPU 감지 실패는 CPU로 처리하며,
 OS GPU 드라이버 자체는 설치하거나 변경하지 않습니다.
 설치 마지막 단계는 활성 MCP의 handshake 및 `codex mcp list`를 실행한 뒤 최종 상태를 출력합니다.
