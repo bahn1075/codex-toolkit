@@ -23,7 +23,11 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 > 프로젝트 안의 `.codex/config.toml`과 `AGENTS.md`는 건드리지 않습니다.
 
 - 지원 환경: macOS 또는 Linux, Bash 3.2 이상
-- 사전 명령: Homebrew, curl, Node.js 22 이상, npm, git, python3, Bun
+- 사전 명령: Homebrew, curl, Node.js 22 이상, npm, git, Bun
+- Python은 기존 toolkit 가상환경 → 실행 전 PATH의 `python3` → PATH의 Python 3.13/3.12/3.11 순서로 재사용합니다.
+  지원 범위는 Python 3.11–3.13이며 SSL, sqlite3, ctypes, tomllib, venv 모듈을 확인합니다.
+  호환되는 Python이 없을 때만 Homebrew `python@3.13`과 그 의존성(`openssl@3` 등)을 설치합니다.
+  기존 가상환경이 손상되거나 지원 범위를 벗어나면 보존한 채 중단합니다.
 - 시작 점검에서 `uv`가 없으면 Homebrew로 자동 설치합니다.
 - Graft 빌드 도구인 make 또는 C/C++ 컴파일러가 없으면 Linux 패키지 관리자로
   자동 설치합니다. Ubuntu/Debian/WSL에서는 `build-essential`을 설치하며,

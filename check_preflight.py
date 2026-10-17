@@ -1,6 +1,9 @@
 """Exercise preflight without installing packages or changing the host."""
 import os
 import pathlib
+import shlex
+import sys
+import tempfile
 import subprocess
 import unittest
 
@@ -131,6 +134,128 @@ printf 'READY uv=%s tools=%s\n' "$HAS_UV" "$HAS_TOOLS"
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("BREW install uv", result.stdout)
         self.assertNotIn("SUDO", result.stdout)
+
+
+
+class BootstrapPythonTests(unittest.TestCase):
+    def run_bootstrap(self, existing=False, system=True, broken=False, versioned=False,
+                      install_failure=False):
+        with tempfile.TemporaryDirectory(prefix="toolkit-python-") as tmp:
+            root = pathlib.Path(tmp)
+            toolkit = root / "toolkit"
+            bundle = toolkit / "bundle"
+            bundle.mkdir(parents=True)
+            (bundle / "configure.py").write_text("")
+            candidate = root / "system-python"
+            candidate.write_text("#!/bin/sh\nexit 1\n" if broken else
+                                 "#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' "$@"\n')
+            candidate.chmod(0o755)
+            if existing:
+                interpreter = toolkit / "venv/bin/python"
+                interpreter.parent.mkdir(parents=True)
+                interpreter.symlink_to(candidate)
+            script = r"""
+set -Eeuo pipefail
+source ./toolkit.sh
+CT_ROOT="$TEST_ROOT/toolkit"
+SCRIPT_DIR="$CT_ROOT/bundle"
+CT_PREFIX="$TEST_ROOT/brew"
+CT_BREW=brew
+CT_UV=uv
+CT_NODE=/usr/bin/node
+CT_SYSTEM_PY="$TEST_SYSTEM_PY"
+command() {
+  if [ "${1:-}" = -v ]; then
+    case "$2" in
+      python3|python3.13|python3.12|python3.11)
+        if [ "$VERSIONED" = 1 ] && [ "$2" = python3.12 ]; then
+          printf '%s\n' "$TEST_ROOT/system-python"; return 0
+        fi
+        return 1 ;;
+    esac
+  fi
+  builtin command "$@"
+}
+brew() {
+  printf 'BREW %s\n' "$*"
+  [ "$INSTALL_FAILURE" = 0 ] || return 1
+  if [ "$1" = install ]; then
+    mkdir -p "$CT_PREFIX/opt/python@3.13/bin"
+    ln -s "$TEST_REAL_PY" "$CT_PREFIX/opt/python@3.13/bin/python3.13"
+  fi
+}
+uv() {
+  printf 'UV %s\n' "$*"
+  if [ "$1" = venv ]; then
+    mkdir -p "$CT_ROOT/venv/bin"
+    ln -s "$TEST_REAL_PY" "$CT_ROOT/venv/bin/python"
+  fi
+}
+bootstrap
+printf 'SELECTED=%s\n' "$CT_BOOT_PY"
+"""
+            env = dict(os.environ, TEST_ROOT=tmp, TEST_REAL_PY=sys.executable,
+                       TEST_SYSTEM_PY=str(candidate) if system else "",
+                       VERSIONED=str(int(versioned)), INSTALL_FAILURE=str(int(install_failure)))
+            result = subprocess.run(["bash", "-c", script], cwd=ROOT, env=env,
+                                    text=True, capture_output=True)
+            if existing:
+                self.assertTrue((toolkit / "venv/bin/python").is_symlink())
+            return result, str(root)
+
+    def test_existing_venv_is_reused_without_brew_or_recreation(self):
+        result, root = self.run_bootstrap(existing=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SELECTED=" + root + "/toolkit/venv/bin/python", result.stdout)
+        self.assertNotIn("BREW", result.stdout)
+        self.assertNotIn("UV venv", result.stdout)
+
+    def test_system_python_is_used_for_new_venv_without_brew(self):
+        result, root = self.run_bootstrap()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("UV venv --python " + root + "/system-python", result.stdout)
+        self.assertNotIn("BREW", result.stdout)
+
+    def test_versioned_python_is_found_without_default_python(self):
+        result, root = self.run_bootstrap(system=False, versioned=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SELECTED=" + root + "/system-python", result.stdout)
+        self.assertNotIn("BREW", result.stdout)
+
+    def test_missing_or_unusable_system_python_falls_back_to_brew(self):
+        for system, broken in [(False, False), (True, True)]:
+            with self.subTest(system=system, broken=broken):
+                result, root = self.run_bootstrap(system=system, broken=broken)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("BREW install python@3.13", result.stdout)
+                self.assertIn("SELECTED=" + root + "/brew/opt/python@3.13/bin/python3.13",
+                              result.stdout)
+
+    def test_broken_existing_venv_stops_without_replacing_it(self):
+        result, _ = self.run_bootstrap(existing=True, broken=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("BREW", result.stdout)
+        self.assertNotIn("UV venv", result.stdout)
+
+    def test_python_compatibility_accepts_supported_versions_only(self):
+        with tempfile.TemporaryDirectory(prefix="toolkit-python-version-") as tmp:
+            wrapper = pathlib.Path(tmp) / "python"
+            for minor, accepted in [(10, False), (11, True), (12, True), (13, True), (14, False)]:
+                with self.subTest(minor=minor):
+                    wrapper.write_text("#!" + sys.executable + "\n"
+                        "import ctypes, sqlite3, ssl, sys, tomllib, venv\n"
+                        f"sys.version_info = (3, {minor}, 0)\n"
+                        "exec(sys.argv[2])\n")
+                    wrapper.chmod(0o755)
+                    result = subprocess.run(["bash", "-c",
+                        'source ./toolkit.sh; python_compatible "$1"', "check", str(wrapper)],
+                        cwd=ROOT, text=True, capture_output=True)
+                    self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
+    def test_brew_failure_stops_bootstrap(self):
+        result, _ = self.run_bootstrap(system=False, install_failure=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("SELECTED=", result.stdout)
 
 
 if __name__ == "__main__":

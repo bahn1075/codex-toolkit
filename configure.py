@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local config editing and read-only MCP protocol checks. Python 3.13 + tomlkit."""
+"""Local config editing and read-only MCP protocol checks. Python 3.11–3.13 + tomlkit."""
 import json
 import os
 import pathlib

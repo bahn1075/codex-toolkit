@@ -87,9 +87,10 @@ preflight() {
   case "$HOME$SCRIPT_DIR" in *$'\n'*|*$'\r'*) die 'Newlines in paths are unsupported.' ;; esac
   case "$SCRIPT_DIR/" in "$CT_HOME/"*) die 'Extract this bundle outside ~/.codex before setup.' ;; esac
   [ ! -L "$CT_HOME" ] || die '~/.codex is a symlink; resolve its intended target before resetting.'
-  for ct_cmd in brew curl npm node git python3 bun; do
+  for ct_cmd in brew curl npm node git bun; do
     command -v "$ct_cmd" >/dev/null || die "Required command missing: $ct_cmd"
   done
+  CT_SYSTEM_PY=$(command -v python3 || true)
   CT_BREW=$(command -v brew)
   CT_NPM=$(command -v npm)
   CT_NODE=$(command -v node)
@@ -150,12 +151,37 @@ reset_codex() {
   if [ -d "$("$CT_NPM" root -g)/@openai/codex" ]; then "$CT_NPM" uninstall -g @openai/codex; fi
   remove_homebrew_codex
 }
+python_compatible() {
+  "$1" -c 'import ctypes, sqlite3, ssl, sys, tomllib, venv
+if not (3, 11) <= sys.version_info[:2] < (3, 14):
+    sys.exit(1)
+ssl.create_default_context()' >/dev/null 2>&1
+}
+select_python() {
+  if [ -d "$CT_ROOT/venv" ]; then
+    CT_BOOT_PY="$CT_ROOT/venv/bin/python"
+    python_compatible "$CT_BOOT_PY" \
+      || die 'Existing toolkit venv needs a working Python 3.11–3.13 with SSL, sqlite3 and ctypes. Preserve it and repair its base Python before retrying.'
+  else
+    CT_BOOT_PY=''
+    for ct_candidate in "${CT_SYSTEM_PY:-}" python3 python3.13 python3.12 python3.11; do
+      [ -n "$ct_candidate" ] || continue
+      ct_python=$(command -v "$ct_candidate") || continue
+      if python_compatible "$ct_python"; then CT_BOOT_PY="$ct_python"; break; fi
+    done
+    if [ -z "$CT_BOOT_PY" ]; then
+      note 'No compatible Python 3.11–3.13 found; installing Homebrew Python 3.13.'
+      "$CT_BREW" update
+      "$CT_BREW" install python@3.13
+      CT_BOOT_PY="$CT_PREFIX/opt/python@3.13/bin/python3.13"
+      python_compatible "$CT_BOOT_PY" || die 'Homebrew Python 3.13 is unavailable or missing required modules.'
+    fi
+  fi
+  note "Using Python: $CT_BOOT_PY"
+}
 bootstrap() {
   CT_STAGE=bootstrap
-  "$CT_BREW" update
-  "$CT_BREW" install python@3.13
-  CT_BOOT_PY="$CT_PREFIX/opt/python@3.13/bin/python3.13"
-  [ -x "$CT_BOOT_PY" ] || die 'Homebrew Python 3.13 was not installed.'
+  select_python
   mkdir -p "$CT_ROOT/bin" "$CT_ROOT/repos" "$CT_ROOT/npm" "$CT_ROOT/logs" "$CT_ROOT/bundle"
   # Keep the installer/update bundle available after the downloaded copy is removed.
   if [ "$SCRIPT_DIR" != "$CT_ROOT/bundle" ]; then
