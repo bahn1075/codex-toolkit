@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import threading
-import tempfile
 import time
 from urllib.parse import urlparse
 import urllib.request
@@ -61,53 +60,10 @@ def table(parent, name):
     return parent[name]
 
 
-def executable(name):
-    value = shutil.which(name)
-    if not value:
-        raise RuntimeError(f'Missing executable: {name}')
-    # Preserve stable symlink paths: resolving Homebrew Cellar breaks after upgrades.
-    return os.path.abspath(value)
-
-
 def safe_path():
-    paths = [os.path.dirname(os.environ.get('CT_NODE', '')),
-             str(ROOT / 'bin'), str(ROOT / 'npm/node_modules/.bin')]
+    paths = [str(ROOT / 'bin')]
     paths.extend(os.environ['PATH'].split(os.pathsep))
     return os.pathsep.join(dict.fromkeys(p for p in paths if p.startswith('/')))
-
-
-def npm_binary(package, expected=None):
-    p = ROOT / 'npm/node_modules' / package / 'package.json'
-    data = json.loads(p.read_text())
-    bins = data.get('bin', {})
-    if isinstance(bins, str):
-        rel = bins
-    elif expected in bins:
-        rel = bins[expected]
-    elif len(bins) == 1:
-        rel = next(iter(bins.values()))
-    else:
-        raise RuntimeError(f'Cannot select executable for {package}: {list(bins)}')
-    target = (p.parent / rel).resolve()
-    if not target.is_file() or not target.is_relative_to(p.parent.resolve()):
-        raise RuntimeError(f'Invalid npm binary path for {package}')
-    return str(target)
-
-
-def npm_policy():
-    """Allow the known native parser builds in the private prefix, including npm 12."""
-    path = ROOT / 'npm/package.json'
-    data = json.loads(path.read_text()) if path.exists() else {}
-    policy = data.setdefault('allowScripts', {})
-    for name in (
-        'tree-sitter', 'tree-sitter-cli', 'tree-sitter-go', 'tree-sitter-java',
-        'tree-sitter-javascript', 'tree-sitter-kotlin', 'tree-sitter-php',
-        'tree-sitter-python', '@davisvaughan/tree-sitter-r',
-        'tree-sitter-swift', 'tree-sitter-typescript',
-    ):
-        # npm matches an alias by its real registry name. Preserve explicit denials.
-        policy.setdefault(name, True)
-    write(path, json.dumps(data, indent=2) + '\n')
 
 
 def replace_block(text, tag, body):
@@ -147,14 +103,9 @@ def configure():
     state = read_state()
     state['path'] = safe_path()
     state['codex'] = os.environ['CT_CODEX']
-    state['node'] = os.environ.get('CT_NODE') or executable('node')
     state['uv'] = os.environ['CT_UV']
-    state['npm'] = os.environ['CT_NPM']
-    graft = npm_binary('@nanonets/graft', 'graft')
-    graft_launch = launcher('graft-mcp',
-        [sys.executable, str(BUNDLE / 'graft_mcp.py'), state['node'], graft])
-    state['graft_binary'] = graft
-    migrate_graft = not state.get('graft_auto_start', False)
+    for key in ('node', 'npm', 'npm_versions', 'graft_binary', 'graft_auto_start'):
+        state.pop(key, None)
     doc = config()
     # Keep login independent from any old OS keychain entry.
     doc['cli_auth_credentials_store'] = 'file'
@@ -172,10 +123,10 @@ def configure():
     # These were managed by older toolkit releases; no longer retain them in Codex.
     servers.pop('kubernetes', None)
     servers.pop('context7', None)
+    servers.pop('graft', None)
     specs = {
         'serena': (str(ROOT / 'bin/serena'), ['start-mcp-server', '--context=codex',
             '--enable-web-dashboard=false', '--open-web-dashboard=false']),
-        'graft': (graft_launch, []),
         'headroom': (launcher('headroom-mcp', [str(ROOT / 'uv-tools/headroom-ai/bin/python'),
             str(BUNDLE / 'headroom_setup.py'), 'serve']), []),
         'mem0': (launcher('mem0-mcp', [sys.executable, str(BUNDLE / 'mem0_mcp.py')]), []),
@@ -186,22 +137,25 @@ def configure():
         entry['command'] = command
         entry['args'] = args
         entry.setdefault('enabled', True)
-        if name == 'graft' and migrate_graft:
-            entry['enabled'] = True
         entry.setdefault('startup_timeout_sec', 120)
         entry.setdefault('tool_timeout_sec', 180)
         env = table(entry, 'env')
         env['PATH'] = state['path']
-        if name == 'graft':
-            env['CODEX_GRAFT_BUILD_TIMEOUT'] = str(min(90, max(.1, float(entry['startup_timeout_sec']) - 10)))
         if name == 'headroom':
             env['HEADROOM_MODE'] = 'token'
             env['HEADROOM_SAVINGS_PROFILE'] = 'balanced'
             env['HEADROOM_MCP_READ'] = 'on'
             env['HEADROOM_KOMPRESS_BACKEND'] = state.get('headroom_hardware', {}).get('backend', 'onnx_cpu')
     save_config(doc)
-    state['graft_auto_start'] = True
     save_state(state)
+    # Older releases used this private prefix only for now-excluded npm tools.
+    for path in (ROOT / 'bin/graft-mcp', ROOT / 'bundle/graft_mcp.py', ROOT / 'bundle/check_graft.py'):
+        path.unlink(missing_ok=True)
+    legacy_npm = ROOT / 'npm'
+    if legacy_npm.is_symlink():
+        legacy_npm.unlink()
+    elif legacy_npm.exists():
+        shutil.rmtree(legacy_npm)
     instructions = CODEX / 'AGENTS.md'
     text = instructions.read_text() if instructions.exists() else ''
     text = replace_block(text, 'CODEX-TOOLKIT', (BUNDLE / 'policy.md').read_text())
@@ -210,7 +164,7 @@ def configure():
     write(instructions, text)
     # Aliases only select the same real Codex binary; no launch-time wrapping needed.
     init = ROOT / 'shell-init.sh'
-    shell_prefix = os.pathsep.join([os.path.dirname(state['codex']), str(ROOT / 'bin'), str(ROOT / 'npm/node_modules/.bin'),
+    shell_prefix = os.pathsep.join([os.path.dirname(state['codex']), str(ROOT / 'bin'),
                                   os.environ['CT_PREFIX'] + '/bin', os.environ['CT_PREFIX'] + '/sbin'])
     init_text = ('# Generated Codex toolkit shell integration\n'
         + 'export PATH=' + shlex.quote(shell_prefix) + ':"$PATH"\n'
@@ -463,8 +417,8 @@ def direct_provider():
 
 def validate():
     state, doc = read_state(), config()
-    managed = ['serena', 'graft', 'headroom', 'mem0']
-    excluded = {'kubernetes', 'context7'}
+    managed = ['serena', 'headroom', 'mem0']
+    excluded = {'graft', 'kubernetes', 'context7'}
     if excluded & set(doc.get('mcp_servers', {})):
         raise RuntimeError('Excluded MCP servers remain configured.')
     for name in managed:
@@ -475,6 +429,8 @@ def validate():
     if headroom.get('env', {}).get('HEADROOM_MODE') != 'token' or \
             headroom.get('env', {}).get('HEADROOM_SAVINGS_PROFILE') != 'balanced':
         raise RuntimeError('Headroom token mode must use the balanced profile.')
+    if headroom.get('env', {}).get('HEADROOM_MCP_READ') != 'on':
+        raise RuntimeError('Headroom file read cache must be enabled.')
     if (CODEX / 'AGENTS.md').stat().st_size > int(doc.get('project_doc_max_bytes', 32768)):
         raise RuntimeError('Global AGENTS.md exceeds instruction byte budget.')
     print('PASS: TOML, managed MCP executable paths, global instruction size.')
@@ -490,12 +446,12 @@ def final_status():
     if read_state().get('headroom_runtime') != 'mcp-only':
         raise RuntimeError('Headroom is not configured for MCP-only operation.')
     doc = config()
-    for name in ['serena', 'graft', 'headroom', 'mem0']:
+    for name in ['serena', 'headroom', 'mem0']:
         enabled = doc['mcp_servers'][name].get('enabled', True)
         print(f"MCP {name}: {'enabled' if enabled else 'disabled'}")
     hardware = read_state().get('headroom_hardware', {})
     print(f"Headroom: MCP-only, token mode, balanced profile; backend={hardware.get('backend', 'onnx_cpu')}, read cache enabled.")
-    print('Excluded MCPs: kubernetes, context7.')
+    print('Excluded MCPs: graft, kubernetes, context7.')
 
 
 def mcp_probe(name, entry, workdir, stderr=subprocess.DEVNULL):
@@ -560,26 +516,6 @@ def mcp_probe(name, entry, workdir, stderr=subprocess.DEVNULL):
             pass
 
 
-def verify_graft():
-    """Probe even when disabled, without requiring the installer to be a Git checkout."""
-    entry = dict(config()['mcp_servers']['graft'])
-    # Check the installed runtime in isolation; doctor checks the user's actual workspace.
-    entry.pop('cwd', None)
-    with tempfile.TemporaryDirectory(prefix='codex-graft-') as workdir, \
-            tempfile.TemporaryFile(mode='w+t') as log:
-        subprocess.run(['git', 'init', '--quiet', workdir], check=True)
-        try:
-            if not mcp_probe('graft', entry, workdir, stderr=log):
-                raise RuntimeError('Graft advertised no tools after automatic index preparation')
-        except Exception as exc:
-            log.seek(0)
-            details = log.read()[-8000:].strip()
-            raise RuntimeError(
-                f'Graft MCP verification failed: {type(exc).__name__}: {exc}\n{details}\n'
-                'Check the native build output and Node/npm toolchain, then rerun setup.sh --resume.'
-            ) from exc
-
-
 def doctor():
     validate()
     failures = 0
@@ -628,8 +564,6 @@ def main():
         state = read_state()
         state['updated_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
         state['ponytail_commit'] = subprocess.check_output(['git', '-C', str(ROOT / 'repos/ponytail'), 'rev-parse', 'HEAD'], text=True).strip()
-        state['npm_versions'] = {p: json.loads((ROOT / 'npm/node_modules' / p / 'package.json').read_text())['version']
-            for p in ['@nanonets/graft']}
         save_state(state)
     elif cmd == 'status':
         state = read_state(); state[args[0]] = args[1]; save_state(state)
@@ -637,8 +571,6 @@ def main():
         state = read_state()
         state['headroom_hardware'] = json.loads(args[0])
         save_state(state)
-    elif cmd == 'npm-policy': npm_policy()
-    elif cmd == 'verify-graft': verify_graft()
     elif cmd == 'configure': configure()
     elif cmd == 'mem0-settings': mem0_settings()
     elif cmd == 'llm-settings': llm_settings()

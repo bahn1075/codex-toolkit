@@ -48,8 +48,6 @@ def check_configure(existing, state=None):
     with patch.dict(c.os.environ, CT_PREFIX='/tools', CT_CODEX='/native/codex', CT_UV='/uv', CT_NPM='/npm', CT_NODE='/selected/node'), \
             patch.object(c, 'read_state', return_value=state or {}), \
             patch.object(c, 'save_state'), \
-            patch.object(c, 'executable', return_value='/node'), \
-            patch.object(c, 'npm_binary', return_value='/package'), \
             patch.object(c, 'launcher', return_value='/launcher'), \
             patch.object(c, 'config', return_value=doc), \
             patch.object(c, 'save_config', side_effect=Saved):
@@ -58,13 +56,12 @@ def check_configure(existing, state=None):
         except Saved:
             pass
     restored = tomlkit.parse(tomlkit.dumps(doc))
-    assert set(restored['mcp_servers']) == {'serena', 'graft', 'headroom', 'mem0'}
+    assert set(restored['mcp_servers']) == {'serena', 'headroom', 'mem0'}
     assert restored['mcp_servers']['headroom']['env']['HEADROOM_MODE'] == 'token'
     assert restored['mcp_servers']['headroom']['env']['HEADROOM_SAVINGS_PROFILE'] == 'balanced'
     assert restored['mcp_servers']['headroom']['env']['HEADROOM_MCP_READ'] == 'on'
     assert restored['mcp_servers']['headroom']['env']['HEADROOM_KOMPRESS_BACKEND'] == (state or {}).get('headroom_hardware', {}).get('backend', 'onnx_cpu')
     assert restored['tui']['status_line_use_colors'] is True
-    assert restored['mcp_servers']['graft']['env']['PATH'].split(c.os.pathsep)[0] == '/selected'
     assert restored['features']['hooks'] is True
     assert 'codex_hooks' not in restored['features']
     assert '--enable-web-dashboard=false' in restored['mcp_servers']['serena']['args']
@@ -74,17 +71,13 @@ def check_configure(existing, state=None):
 
 doc = check_configure('[features]\ncodex_hooks = true\nother = false\n')
 assert doc['features']['other'] is False
-assert doc['mcp_servers']['graft']['enabled'] is True
+assert 'graft' not in doc['mcp_servers']
 doc = check_configure(tomlkit.dumps(doc))
 for backend in ('onnx_coreml', 'pytorch'):
     check_configure(tomlkit.dumps(doc), {'headroom_hardware': {'backend': backend}})
-assert doc['mcp_servers']['graft']['enabled'] is True
+assert 'graft' not in doc['mcp_servers']
 doc = check_configure('[mcp_servers.graft]\nenabled = true\ntool_timeout_sec = 42\n')
-assert doc['mcp_servers']['graft']['enabled'] is True
-assert doc['mcp_servers']['graft']['tool_timeout_sec'] == 42
-assert check_configure('[mcp_servers.graft]\nenabled = false\n')['mcp_servers']['graft']['enabled'] is True
-assert check_configure('[mcp_servers.graft]\nenabled = false\n',
-    {'graft_auto_start': True})['mcp_servers']['graft']['enabled'] is False
+assert 'graft' not in doc['mcp_servers']
 legacy_doc = check_configure('''[mcp_servers.kubernetes]
 command = "/legacy/kubernetes"
 
@@ -95,7 +88,7 @@ assert 'kubernetes' not in legacy_doc['mcp_servers']
 assert 'context7' not in legacy_doc['mcp_servers']
 
 assert doc['mcp_servers']['mem0']['enabled'] is True
-assert set(doc['mcp_servers']) == {'serena', 'graft', 'headroom', 'mem0'}
+assert set(doc['mcp_servers']) == {'serena', 'headroom', 'mem0'}
 assert doc['mcp_servers']['headroom']['enabled'] is True
 assert doc['mcp_servers']['headroom']['env']['HEADROOM_MODE'] == 'token'
 assert doc['mcp_servers']['headroom']['env']['HEADROOM_SAVINGS_PROFILE'] == 'balanced'
@@ -155,11 +148,10 @@ with patch.object(c, 'config', return_value=status_doc), \
     c.final_status()
 assert output.getvalue().splitlines() == [
     'MCP serena: enabled',
-    'MCP graft: disabled',
     'MCP headroom: enabled',
     'MCP mem0: enabled',
     'Headroom: MCP-only, token mode, balanced profile; backend=onnx_cpu, read cache enabled.',
-    'Excluded MCPs: kubernetes, context7.',
+    'Excluded MCPs: graft, kubernetes, context7.',
 ]
 with patch.object(c, 'config', return_value=status_doc), \
         patch.object(c, 'read_state', return_value={'headroom_runtime': 'configured'}):
@@ -216,10 +208,10 @@ install_packages
 ''', 'check', str(Path(__file__).resolve().parent), str(toolkit_root), str(npm_log)],
         capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert '@nanonets/graft@latest' in result.stdout
+    assert '@nanonets/graft@latest' not in result.stdout
+    assert 'install --prefix' not in result.stdout
     assert 'kubernetes-mcp-server' not in result.stdout
     assert '@upstash/context7-mcp@latest' not in result.stdout
-    assert '@upstash/context7-mcp' in npm_log.read_text()
 
 with tempfile.TemporaryDirectory() as tmp:
     home = Path(tmp) / 'home'
@@ -359,58 +351,8 @@ printf 'CONTINUED'
     assert result.stdout.endswith('CONTINUED')
     assert ('Superpowers installation failed' in result.stderr) == bool(plugin_exit)
 
-with tempfile.TemporaryDirectory() as tmp, patch.object(c, 'ROOT', Path(tmp)):
-    c.npm_policy()
-    manifest = Path(tmp) / 'npm/package.json'
-    data = json.loads(manifest.read_text())
-    assert data['allowScripts']['tree-sitter-kotlin'] is True
-    assert data['allowScripts']['@davisvaughan/tree-sitter-r'] is True
-    assert '*' not in data['allowScripts']
-    data.update(dependencies={'example': '1.0.0'})
-    data['allowScripts']['tree-sitter-kotlin'] = False
-    manifest.write_text(json.dumps(data))
-    c.npm_policy()
-    assert json.loads(manifest.read_text()) == data
-
-# Exercise the real stdio probe, including stderr and process cleanup, in a fresh Git repo.
-with tempfile.TemporaryDirectory() as tmp:
-    server = Path(tmp) / 'server.py'
-    server.write_text('''import json, os, subprocess, sys, time
-assert subprocess.check_output(['git', 'rev-parse', '--show-toplevel'], text=True).strip() == os.getcwd()
-mode = sys.argv[1]
-if mode == 'crash':
-    print('No native build was found: tree-sitter-kotlin', file=sys.stderr)
-    sys.exit(1)
-if mode == 'timeout':
-    time.sleep(30)
-for line in sys.stdin:
-    message = json.loads(line)
-    if message.get('method') == 'initialize':
-        result = {'protocolVersion': '2024-11-05', 'capabilities': {}, 'serverInfo': {'name': 'test', 'version': '1'}}
-    elif message.get('method') == 'tools/list':
-        result = {'tools': [] if mode == 'idle' else [{'name': 'test', 'inputSchema': {'type': 'object'}}]}
-    else:
-        continue
-    print(json.dumps({'jsonrpc': '2.0', 'id': message['id'], 'result': result}), flush=True)
-''')
-    for mode in ('ok', 'crash', 'timeout', 'idle'):
-        entry = {'command': c.sys.executable, 'args': [str(server), mode],
-                 'enabled': False, 'cwd': '/nonexistent', 'startup_timeout_sec': 0.5}
-        with patch.object(c, 'config', return_value={'mcp_servers': {'graft': entry}}), \
-                contextlib.redirect_stdout(io.StringIO()) as output:
-            try:
-                c.verify_graft()
-            except RuntimeError as exc:
-                assert mode != 'ok'
-                assert 'Graft MCP verification failed' in str(exc)
-                if mode == 'crash':
-                    assert 'No native build was found: tree-sitter-kotlin' in str(exc)
-            else:
-                assert mode == 'ok'
-                assert 'MCP handshake and 1 tool definitions' in output.getvalue()
-
-# Both entrypoints share finish(): a failed Graft probe must prevent the success message.
-for failed in ('', 'verify-graft'):
+# Both entrypoints share finish(): failed diagnostics must prevent the success message.
+for failed in ('', 'doctor'):
     result = subprocess.run(['bash', '-c', '''
 set -Eeuo pipefail
 source "$1/toolkit.sh"
@@ -425,4 +367,36 @@ finish
     assert (result.returncode == 0) == (not failed)
     assert ('Install/configuration pass finished' in result.stdout) == (not failed)
 
-print('PASS: configuration, Graft build policy/runtime probe/failure gate, Superpowers handling.')
+print('PASS: configuration, excluded Graft, Headroom read cache, diagnostics gate, Superpowers handling.')
+
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    codex = home / '.codex'
+    root = codex / 'toolkit'
+    pony = root / 'repos/ponytail/AGENTS.md'
+    pony.parent.mkdir(parents=True)
+    pony.write_text('Ponytail instructions\n')
+    (root / 'npm').mkdir()
+    (root / 'npm/old-graft').write_text('obsolete private package')
+    (root / 'bin').mkdir()
+    (root / 'bin/graft-mcp').write_text('obsolete launcher')
+    with patch.object(c, 'HOME', home), patch.object(c, 'CODEX', codex), \
+            patch.object(c, 'ROOT', root), patch.object(c, 'STATE', root / 'install-state.json'), \
+            patch.object(c, 'CONFIG', codex / 'config.toml'), \
+            patch.dict(c.os.environ, CT_PREFIX='/tools', CT_CODEX='/native/codex', CT_UV='/uv', ZDOTDIR=str(home)):
+        c.write(c.CONFIG, '[mcp_servers.graft]\ncommand = "/old/graft"\n')
+        c.configure()
+        assert 'graft' not in c.config()['mcp_servers']
+        assert not (root / 'npm').exists() and not (root / 'bin/graft-mcp').exists()
+        assert 'headroom_read' in (codex / 'AGENTS.md').read_text()
+        doc = c.config()
+        doc['mcp_servers']['headroom']['env']['HEADROOM_MCP_READ'] = 'off'
+        c.save_config(doc)
+        with patch.object(c.os, 'access', return_value=True), contextlib.redirect_stdout(io.StringIO()):
+            try:
+                c.validate()
+            except RuntimeError as exc:
+                assert 'read cache' in str(exc)
+            else:
+                raise AssertionError('installation must reject a disabled Headroom read cache')
+print('PASS: real config migration removes legacy Graft and enforces Headroom read cache.')

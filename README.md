@@ -8,7 +8,7 @@ macOS와 Linux에서 Codex CLI·VS Code 확장과 개발용 MCP를 한 번에 �
 | 구분 | 구성 요소 |
 |---|---|
 | Codex | 공식 native Codex CLI, VS Code `openai.chatgpt` 확장 |
-| MCP | Serena, Graft, Headroom, Mem0 |
+| MCP | Serena, Headroom, Mem0 (Graft는 설치·등록 대상에서 제외) |
 | 지침·플러그인 | Ponytail 지침, Superpowers 플러그인 |
 | 편의 명령 | `codex-update`, `codex-doctor`, `mem0-import` |
 
@@ -23,13 +23,13 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 > 프로젝트 안의 `.codex/config.toml`과 `AGENTS.md`는 건드리지 않습니다.
 
 - 지원 환경: macOS 또는 Linux, Bash 3.2 이상
-- 사전 명령: Homebrew, curl, Node.js 22 이상, npm, git, Bun
+- 사전 명령: Homebrew, curl, git, Bun
 - Python은 기존 toolkit 가상환경 → 실행 전 PATH의 `python3` → PATH의 Python 3.13/3.12/3.11 순서로 재사용합니다.
   지원 범위는 Python 3.11–3.13이며 SSL, sqlite3, ctypes, tomllib, venv 모듈을 확인합니다.
   호환되는 Python이 없을 때만 Homebrew `python@3.13`과 그 의존성(`openssl@3` 등)을 설치합니다.
   기존 가상환경이 손상되거나 지원 범위를 벗어나면 보존한 채 중단합니다.
 - 시작 점검에서 `uv`가 없으면 Homebrew로 자동 설치합니다.
-- Graft 빌드 도구인 make 또는 C/C++ 컴파일러가 없으면 Linux 패키지 관리자로
+- 패키지 빌드에 필요한 make 또는 C/C++ 컴파일러가 없으면 Linux 패키지 관리자로
   자동 설치합니다. Ubuntu/Debian/WSL에서는 `build-essential`을 설치하며,
   dnf, yum, pacman, zypper, apk도 지원합니다. `uv`와 빌드 도구가 모두 없으면 둘 다 설치합니다.
   macOS에서는 Xcode Command Line Tools를 미리 설치하세요(`xcode-select --install`).
@@ -45,11 +45,13 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 | `bash setup.sh` | 최초 설치 또는 완전 초기화. 기존 `~/.codex`를 백업한 뒤 새로 구성 |
 | `bash setup.sh --resume` | 기존 `~/.codex`를 유지하면서 실패·누락된 설치와 설정을 다시 맞춤 |
 | `bash update.sh` | 설치된 툴킷과 패키지를 업데이트하고 설정을 재적용 |
+| `bash remove.sh --dry-run` | 삭제 대상과 실행할 제거 명령만 확인 |
+| `bash remove.sh` | toolkit 구성요소·Codex native CLI와 설정 연동 제거 |
 | `bash setup.sh --help` | 지원 옵션과 환경 변수 확인 |
 
 `setup.sh`와 `update.sh`는 다음 작업을 순서대로 수행합니다.
 
-1. 운영체제, 필수 명령, Node.js 버전과 실행 중인 Codex 프로세스를 검사합니다.
+1. 운영체제, 필수 명령과 실행 중인 Codex 프로세스를 검사합니다.
 2. 공식 native installer로 Codex를 설치하거나 업데이트하고(기존 Homebrew Codex formula/cask는 제거), MCP 의존성과 등록된 Serena 프로젝트의 언어 서버를 다시 맞춥니다.
 3. `~/.codex/config.toml`, 전역 `AGENTS.md`, shell alias를 구성합니다.
 4. Mem0 연결 정보와 hook, Headroom의 token/balanced MCP 모드, Superpowers를 구성합니다.
@@ -79,7 +81,7 @@ codex
 Codex의 `/mcp`에서 연결 상태를 확인하세요. 자동 메모리를 사용하려면 `/hooks`에서
 Mem0의 `SessionStart`·`SessionEnd` hook을 검토하고 신뢰해야 합니다.
 
-정상 완료된 `setup.sh`는 Mem0 구성과 Graft 활성화·검증까지 마친 상태이므로
+정상 완료된 `setup.sh`는 Mem0 구성과 Headroom 읽기 캐시 검증까지 마친 상태이므로
 `--resume`을 다시 실행할 필요가 없습니다.
 
 Superpowers는 로그인이나 워크스페이스 관리자 허용 문제로 설치가 실패할 수 있습니다.
@@ -97,7 +99,7 @@ codex plugin add superpowers@openai-curated-remote
 - `~/.codex`를 이동하거나 새로 만들지 않아 로그인, 대화 기록과 사용자 설정을 유지합니다.
 - 설치 상태를 재사용하면서 패키지, MCP 실행 경로, 전역 지침과 hook을 다시 확인합니다.
 - Mem0 설정 파일이 없으면 Oracle 연결 정보와 모델 API URL을 다시 입력받고, 있으면 기존 값을 재사용합니다.
-- Graft 실행 경로를 다시 등록하고 임시 Git 저장소에서 MCP 시작과 도구 제공을 검증합니다.
+- 이전 버전의 Graft MCP 등록·실행 파일과 toolkit 전용 npm 패키지를 정리합니다.
 - 모든 설치 단계를 다시 실행하므로 네트워크가 필요하고 다소 시간이 걸릴 수 있습니다.
 
 다음 경우에 실행하세요.
@@ -105,8 +107,8 @@ codex plugin add superpowers@openai-curated-remote
 - 최초 설치가 오류나 강제 종료로 중단된 경우
 - `Partial setup`이 표시된 경우
 - Mem0 입력을 완료하지 못했거나 hook/MCP 등록을 다시 적용해야 하는 경우
-- Node, npm, uv 등 실행 환경의 경로가 바뀐 경우
-- Headroom 모드를 바꾸거나 Graft 설정을 복구한 경우
+- uv 등 실행 환경의 경로가 바뀐 경우
+- Headroom 설정을 복구한 경우
 
 ```bash
 bash setup.sh --resume
@@ -137,23 +139,23 @@ codex-doctor
 `--resume`을 실행하세요. 완료 후 Codex를 다시 시작해 `/mcp`에서 `mem0`,
 `/hooks`에서 두 hook을 확인합니다.
 
-### Graft 활성화와 확인
+### 구성요소 제거
 
-최초 설치와 이전 설정의 마이그레이션에서는 Graft를 기본 활성화합니다. 이후 사용자가
-`~/.codex/config.toml`의 기존 `[mcp_servers.graft]` 항목을
-`enabled = false`로 바꾼 경우에는 `--resume`도 그 선택을 보존합니다. 다시
-활성화하려면 같은 항목을 `enabled = true`로 수정한 뒤 다음을 실행하세요.
+Codex·VS Code를 종료한 후 `bash remove.sh --dry-run`으로 대상을 확인하고
+`bash remove.sh`를 실행합니다. 원본 저장소가 없으면
+`bash ~/.codex/toolkit/bundle/remove.sh`도 사용할 수 있습니다.
 
-```bash
-bash ~/.codex/toolkit/bundle/setup.sh --resume
-codex mcp list
-codex-doctor
-```
+toolkit 전용 Serena·Headroom·Mem0 런타임, Ponytail 체크아웃, 이전 npm 도구,
+native Codex CLI, toolkit MCP·hook·shell 연동과 Mem0 재시도 서비스를 제거합니다.
+등록된 Superpowers는 Codex의 제거 명령을 사용하며, 이 버전 이후 toolkit이 새로 설치한
+VS Code 확장도 제거합니다. 이전 버전은 확장 소유권을 기록하지 않아 기존 확장을 보존합니다.
+수정 전 설정, Mem0 연결 정보와 미처리 작업은 권한이 제한된
+`~/.codex-backups/remove-*`에 백업합니다. 로그인·대화 기록, 다른 플러그인과
+사용자 설정, 공유 Homebrew/Python/uv/컴파일러·모델 캐시, Oracle의 벡터 데이터는
+보존합니다. 설치 전의 `reset-*` 백업도 자동 복원하거나 삭제하지 않습니다.
 
-Codex를 Git 저장소 안에서 다시 시작하고 `/mcp`에서 `graft`가 활성 상태인지
-확인합니다. Git 저장소 밖에서 Graft가 도구 0개로 대기하는 것은 정상입니다.
-Codex CLI와 IDE 확장은 같은 MCP 설정을 공유합니다.
-[공식 MCP 안내](https://developers.openai.com/codex/mcp)
+설치 이력이 없거나 심볼릭 링크 때문에 삭제 범위가 불명확하면 제거를 중단합니다.
+이미 toolkit이 제거된 상태에서 다시 실행해도 사용자 파일은 삭제하지 않습니다.
 
 ## 운영 명령
 
@@ -268,8 +270,7 @@ PyTorch 환경의 마지막 인자는 기록된 `torch_backend`로 바꿉니다.
 
 ## 알아둘 점
 
-- Graft는 Git 저장소에서만 구조 인덱스를 자동 준비합니다. 별도의 `graft init`이나
-  `graft build`는 필요하지 않습니다.
+- Graft는 제외하며, 코드 구조와 호출 관계는 Serena의 심볼·참조 도구를 우선 사용합니다.
 - `codex-doctor`는 stdio MCP의 초기화와 도구 목록을 검사합니다. 플러그인과 hook은
   `/mcp`, `/hooks`에서 별도로 확인해야 하며 실제 모델 추론까지 보장하지는 않습니다.
 - Remote SSH나 컨테이너에서는 Codex가 실행되는 원격 환경에도 이 툴킷을 설치해야 합니다.
@@ -296,7 +297,7 @@ secondary로 재시도합니다. 각 서버에서 현재 로드된 모델을 사
 python3 check_preflight.py
 ~/.codex/toolkit/venv/bin/python -m unittest check_headroom
 ~/.codex/toolkit/venv/bin/python check_configure.py
-~/.codex/toolkit/venv/bin/python check_graft.py
+~/.codex/toolkit/venv/bin/python check_remove.py
 ~/.codex/toolkit/venv/bin/python check_mem0_session.py
 ~/.codex/toolkit/venv/bin/python check_mem0_tasks.py
 ~/.codex/toolkit/venv/bin/python check_model_api.py

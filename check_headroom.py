@@ -41,6 +41,18 @@ class HeadroomTests(unittest.TestCase):
                 self.assertTrue(context.check_hostname)
         self.assertEqual(calls, [('settings', {'setting': 'value'}), ('tls',)])
 
+    def test_runtime_supports_headroom_039_tls_bootstrap(self):
+        calls = []
+        tls = SimpleNamespace(apply_global_tls_relaxation=lambda: calls.append('tls'),
+                              build_httpx_verify=lambda: ssl.create_default_context())
+        settings = SimpleNamespace(load=lambda: {}, apply_to_environ=lambda data: None)
+        with patch.dict(sys.modules, {'headroom': SimpleNamespace(settings_store=settings),
+                'headroom.proxy.ssl_context': tls,
+                'huggingface_hub': SimpleNamespace(set_client_factory=lambda factory: None),
+                'huggingface_hub.utils': SimpleNamespace(_http=None)}):
+            h.initialize_runtime()
+        self.assertEqual(calls, ['tls'])
+
     def test_hardware_plans_only_install_usable_accelerators(self):
         self.assertIsNotNone(h, 'Headroom hardware configuration is missing')
         cases = [

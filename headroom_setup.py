@@ -81,7 +81,12 @@ def initialize_runtime():
     # Preserve the CLI's settings precedence and OS/additive certificate trust.
     from headroom import settings_store
     settings_store.apply_to_environ(settings_store.load())
-    from headroom.proxy.ssl_context import build_httpx_verify, ensure_process_trust
+    from headroom.proxy.ssl_context import build_httpx_verify
+    try:
+        from headroom.proxy.ssl_context import ensure_process_trust
+    except ImportError:
+        # Headroom 0.39.x uses the earlier, opt-in TLS bootstrap name.
+        from headroom.proxy.ssl_context import apply_global_tls_relaxation as ensure_process_trust
     ensure_process_trust()
     from huggingface_hub import set_client_factory
     from huggingface_hub.utils import _http
