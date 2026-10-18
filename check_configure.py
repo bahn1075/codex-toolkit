@@ -334,25 +334,65 @@ with tempfile.TemporaryDirectory() as tmp:
     mem0 = json.loads(target.read_text())
     assert mem0['embedding_api_url'] == 'http://embedding.example/v1/embeddings'
 
-for plugin_exit in (0, 1):
+for auth_exit, tty_exit, login_exit, plugin_exit, expected in (
+        (0, 1, 0, 0, 'installed'), (0, 1, 0, 1, 'failed'),
+        (1, 1, 0, 0, 'pending-login'), (1, 0, 0, 0, 'installed'),
+        (1, 0, 1, 0, 'pending-login')):
     result = subprocess.run(['bash', '-c', '''
 set -Eeuo pipefail
 source "$1/toolkit.sh"
+SCRIPT_DIR=$1
+auth_exit=$2 tty_exit=$3 login_exit=$4 plugin_exit=$5
 mock_codex() {
-  [ "$*" = 'plugin add superpowers@openai-curated-remote' ] || exit 99
-  return "$plugin_exit"
+  case "$*" in
+    'login status') return "$auth_exit" ;;
+    login) printf 'LOGIN_STARTED\\n'; return "$login_exit" ;;
+    'plugin add superpowers@openai-curated-remote') printf 'PLUGIN_ATTEMPT\\n'; return "$plugin_exit" ;;
+    *) return 99 ;;
+  esac
 }
+mock_python() { printf 'STATE %s\\n' "$*"; }
+test() { if [ "$1" = -t ]; then return "$tty_exit"; fi; builtin test "$@"; }
 CT_CODEX=mock_codex
-plugin_exit=$2
+CT_PY=mock_python
 install_plugins
-printf 'CONTINUED'
-''', 'check', str(Path(__file__).resolve().parent), str(plugin_exit)],
+printf 'FAILURES=%s\\n' "$CT_FAILURES"
+''', 'check', str(Path(__file__).resolve().parent),
+        *map(str, (auth_exit, tty_exit, login_exit, plugin_exit))],
         capture_output=True, text=True, check=True)
-    assert result.stdout.endswith('CONTINUED')
-    assert ('Superpowers installation failed' in result.stderr) == bool(plugin_exit)
+    assert f'status superpowers_install {expected}' in result.stdout, result.stdout
+    assert f'FAILURES={int(expected != "installed")}' in result.stdout
+    assert ('PLUGIN_ATTEMPT' in result.stdout) == (expected != 'pending-login')
+    assert ('LOGIN_STARTED' in result.stdout) == bool(auth_exit and not tty_exit)
+
+for existing, list_exit, install_exit in ((True, 0, 0), (False, 0, 0),
+                                          (False, 0, 1), (False, 1, 0)):
+    result = subprocess.run(['bash', '-c', '''
+set -Eeuo pipefail
+source "$1/toolkit.sh"
+SCRIPT_DIR=$1
+existing=$2 list_exit=$3 install_exit=$4
+mock_python() { printf 'STATE %s\\n' "$*"; }
+mock_codex() { return 0; }
+code() {
+  case "$1" in
+    --list-extensions) if [ "$existing" = 1 ]; then printf 'openai.chatgpt\\n'; fi; return "$list_exit" ;;
+    --install-extension) printf 'EXTENSION_INSTALL\\n'; return "$install_exit" ;;
+    *) return 99 ;;
+  esac
+}
+CT_PY=mock_python CT_CODEX=mock_codex
+configure_core
+printf 'FAILURES=%s\\n' "$CT_FAILURES"
+''', 'check', str(Path(__file__).resolve().parent), str(int(existing)), str(list_exit), str(install_exit)],
+        capture_output=True, text=True, check=True)
+    assert ('EXTENSION_INSTALL' in result.stdout) == (not existing), result.stdout
+    assert ('status vscode_extension_installed true' in result.stdout) == (
+        not existing and not list_exit and not install_exit)
+    assert f'FAILURES={int(bool(install_exit))}' in result.stdout
 
 # Both entrypoints share finish(): failed diagnostics must prevent the success message.
-for failed in ('', 'doctor'):
+for failed in ('', 'doctor', 'component'):
     result = subprocess.run(['bash', '-c', '''
 set -Eeuo pipefail
 source "$1/toolkit.sh"
@@ -360,6 +400,7 @@ CT_PY=mock_python
 CT_CODEX=mock_codex
 SCRIPT_DIR=$1
 failed=$2
+if [ "$failed" = component ]; then CT_FAILURES=1; fi
 mock_python() { [ "$2" != "$failed" ]; }
 mock_codex() { [ "$*" = 'mcp list' ]; }
 finish

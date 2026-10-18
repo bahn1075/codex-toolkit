@@ -54,7 +54,7 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 1. 운영체제, 필수 명령과 실행 중인 Codex 프로세스를 검사합니다.
 2. 공식 native installer로 Codex를 설치하거나 업데이트하고(기존 Homebrew Codex formula/cask는 제거), MCP 의존성과 등록된 Serena 프로젝트의 언어 서버를 다시 맞춥니다.
 3. `~/.codex/config.toml`, 전역 `AGENTS.md`, shell alias를 구성합니다.
-4. Mem0 연결 정보와 hook, Headroom의 token/balanced MCP 모드, Superpowers를 구성합니다.
+4. Mem0 연결 정보와 hook, Headroom의 token/balanced MCP 모드를 구성합니다. Superpowers 설치 전에 로그인을 확인하며, 대화형 터미널에서 필요하면 ChatGPT 로그인을 진행합니다.
 5. 설정 유효성과 모든 활성 MCP의 실제 시작·도구 목록 및 최종 상태를 검사합니다.
 
 Codex native CLI는 기본적으로 `~/.local/bin/codex`에 설치됩니다.
@@ -73,7 +73,7 @@ bash setup.sh
 완료 후 새 터미널을 열고 다음 순서로 확인합니다.
 
 ```bash
-codex login
+codex login status
 codex-doctor
 codex
 ```
@@ -84,10 +84,13 @@ Mem0의 `SessionStart`·`SessionEnd` hook을 검토하고 신뢰해야 합니다
 정상 완료된 `setup.sh`는 Mem0 구성과 Headroom 읽기 캐시 검증까지 마친 상태이므로
 `--resume`을 다시 실행할 필요가 없습니다.
 
-Superpowers는 로그인이나 워크스페이스 관리자 허용 문제로 설치가 실패할 수 있습니다.
-나머지 설치는 계속되며, 조건이 해결된 뒤 다음 명령으로 다시 설치할 수 있습니다.
+비대화형 실행에서 로그인이 없거나 Superpowers 설치가 실패하면 나머지 MCP 검사는 계속되지만,
+최종 결과는 `Partial setup`과 종료 코드 1로 표시합니다. 인증 또는 워크스페이스 관리자 허용
+문제를 해결한 뒤 다음 명령으로 다시 설치할 수 있습니다. 브라우저를 열 수 없는 원격 환경에서는
+`codex login --device-auth`를 사용할 수 있습니다.
 
 ```bash
+codex login
 codex plugin add superpowers@openai-curated-remote
 ```
 
@@ -274,6 +277,26 @@ PyTorch 환경의 마지막 인자는 기록된 `torch_backend`로 바꿉니다.
 - `codex-doctor`는 stdio MCP의 초기화와 도구 목록을 검사합니다. 플러그인과 hook은
   `/mcp`, `/hooks`에서 별도로 확인해야 하며 실제 모델 추론까지 보장하지는 않습니다.
 - Remote SSH나 컨테이너에서는 Codex가 실행되는 원격 환경에도 이 툴킷을 설치해야 합니다.
+- 이미 설치된 VS Code 확장은 재설치하지 않습니다. 확장 업데이트는 VS Code에서 관리합니다.
+
+### 설치 로그의 경고
+
+| 메시지 | 원인과 처리 |
+|---|---|
+| uv `--torch-backend` experimental | `uv tool install`의 GPU 선택 옵션에서 발생합니다. toolkit은 기본 환경 설치 후 안정화된 `uv pip install --torch-backend`로 GPU 의존성을 추가합니다. |
+| ROCm `(null): No such file or directory` | PyTorch에 포함된 libdrm이 GPU 이름 표 `amdgpu.ids`를 찾지 못할 때 발생할 수 있습니다. Linux PyTorch 모드에서 기존 표 파일을 찾아 `AMDGPU_ASIC_ID_TABLE_PATH`를 지정합니다. 사용자 지정 값은 보존하며, 표가 없으면 파일을 만들거나 경고를 숨기지 않습니다. |
+| ModernBERT `UNEXPECTED` (`decoder.bias`, `head.dense.weight`, `head.norm.weight`) | 사전학습용 마스크 예측 헤드를 인코더 모델에서 사용하지 않아 발생하는 정상 로딩 보고입니다. Headroom 압축용 가중치는 이후 별도로 로드합니다. 다른 키의 누락·크기 불일치와 추론 오류까지 무시해도 된다는 뜻은 아닙니다. |
+| VS Code `DEP0169` | VS Code CLI 내부 `url.parse()` 사용에 대한 Node 경고입니다. 기존 확장의 불필요한 설치 호출은 생략합니다. 새 확장 설치 시 같은 경고가 남으면 VS Code 업데이트가 필요할 수 있습니다. |
+
+`ml_tokens_saved: 0` 하나만으로 모델 실패를 판단하지 않습니다. 입력에 따라 원문을 유지할 수
+있으므로, doctor는 실제 추론 점수의 유효성, GPU 실행, MCP 압축·원문 복원·읽기 캐시를
+각각 검사합니다. 현재 기기가 GPU를 제공하지 않으면 ROCm 실기 검증은 해당 GPU 기기에서
+`headroom_setup.py verify`로 진행해야 합니다.
+
+근거: [PyTorch의 libdrm 패치](https://github.com/pytorch/pytorch/blob/v2.14.1/.ci/docker/common/install_rocm_drm.sh),
+[ModernBERT 원본 구성](https://huggingface.co/answerdotai/ModernBERT-base/blob/main/config.json),
+[VS Code 경고 보고](https://github.com/microsoft/vscode/issues/326998),
+[Codex 인증 안내](https://learn.chatgpt.com/docs/auth).
 
 ## 모델 API URL만 재설정
 

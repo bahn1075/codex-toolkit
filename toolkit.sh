@@ -252,9 +252,11 @@ configure_core() {
   if command -v code >/dev/null; then
     ct_extension_added=0
     if ct_extensions=$(code --list-extensions); then
-      if ! printf '%s\n' "$ct_extensions" | grep -Fxi 'openai.chatgpt' >/dev/null; then
-        ct_extension_added=1
+      if printf '%s\n' "$ct_extensions" | grep -Fxi 'openai.chatgpt' >/dev/null; then
+        note 'VS Code openai.chatgpt is already installed; VS Code manages its updates.'
+        return 0
       fi
+      ct_extension_added=1
     fi
     if ! code --install-extension openai.chatgpt --force; then
       printf '%s\n' 'VS Code extension installation failed; install/update it in VS Code.' >&2
@@ -282,10 +284,24 @@ configure_headroom() {
 install_plugins() {
   CT_STAGE=plugins
   note 'Installing Superpowers from the OpenAI curated marketplace.'
-  if ! "$CT_CODEX" plugin add superpowers@openai-curated-remote; then
+  ct_plugin_status=pending-login
+  if "$CT_CODEX" login status >/dev/null 2>&1 || {
+    note 'ChatGPT login is required before installing Superpowers.'
+    test -t 0 && test -t 1 && "$CT_CODEX" login
+  }; then
+    ct_plugin_status=failed
+    if "$CT_CODEX" plugin add superpowers@openai-curated-remote; then
+      ct_plugin_status=installed
+    fi
+  fi
+  "$CT_PY" "$SCRIPT_DIR/configure.py" status superpowers_install "$ct_plugin_status"
+  if [ "$ct_plugin_status" != installed ]; then
+    CT_FAILURES=$((CT_FAILURES + 1))
     printf '%s\n' \
-      'Superpowers installation failed; continuing with the remaining toolkit steps.' \
-      'After login and workspace admin approval, retry: codex plugin add superpowers@openai-curated-remote' >&2
+      "Superpowers is $ct_plugin_status; remaining MCP checks will still run." \
+      'Complete ChatGPT login: codex login (headless: codex login --device-auth).' \
+      'Then retry: codex plugin add superpowers@openai-curated-remote' \
+      'Workspace plugin approval, if required, must be granted by your administrator.' >&2
   fi
 }
 finish() {
@@ -294,15 +310,15 @@ finish() {
   "$CT_PY" "$SCRIPT_DIR/configure.py" doctor
   "$CT_PY" "$SCRIPT_DIR/configure.py" final-status
   "$CT_CODEX" mcp list
+  if [ "$CT_FAILURES" -gt 0 ]; then
+    printf 'Partial setup: %s stage(s) incomplete. Follow the reported recovery commands or rerun bash setup.sh --resume.\n' "$CT_FAILURES" >&2
+    exit 1
+  fi
   note 'Install/configuration pass finished. The MCP status above is the final setup check.'
   printf '%s\n' \
-    'Open a new terminal (or restart VS Code), then run: codex login' \
+    'Open a new terminal (or restart VS Code). Login status: codex login status' \
     'Run codex and start a new thread; Mem0 is available through /mcp.' \
     'Review and trust the Mem0 SessionStart/SessionEnd hooks in /hooks to enable automatic session memory.' \
     'MCP visibility: /mcp. Connection test: ~/.codex/toolkit/bin/codex-doctor' \
     'Update later: bash ~/.codex/toolkit/bundle/update.sh'
-  if [ "$CT_FAILURES" -gt 0 ]; then
-    printf 'Partial setup: %s stage(s) failed. Fix the reported cause, then bash setup.sh --resume.\n' "$CT_FAILURES" >&2
-    exit 1
-  fi
 }

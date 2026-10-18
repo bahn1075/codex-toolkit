@@ -49,31 +49,32 @@ def plan(system, machine, vendors, detected='cpu'):
             'backend': backend, 'torch_backend': torch, 'reason': reason}
 
 
-def install_args(selected, python, uv):
-    package = 'headroom-ai[mcp,code,ml]>=0.39.1' if selected['torch_backend'] else \
-        'headroom-ai[mcp,code]>=0.39.1'
-    args = [uv, 'tool', 'install', '--upgrade', '--reinstall', '--python', python,
-            package, '--with', 'onnxruntime>=1.24,<2', '--with', 'transformers>=5.5,<6']
-    if selected['torch_backend']:
-        args += ['--torch-backend', selected['torch_backend']]
-    return args
+def install_args(python, uv):
+    return [uv, 'tool', 'install', '--upgrade', '--reinstall', '--python', python,
+            'headroom-ai[mcp,code]>=0.39.1', '--with', 'onnxruntime>=1.24,<2',
+            '--with', 'transformers>=5.5,<6']
 
 
 def install(selected, python, uv, root):
+    runtime = str(root / 'uv-tools/headroom-ai/bin/python')
     try:
-        subprocess.run(install_args(selected, python, uv), check=True, stdout=sys.stderr)
-        subprocess.run([str(root / 'uv-tools/headroom-ai/bin/python'), __file__,
-            'verify', selected['backend'], selected['torch_backend'] or 'cpu'],
-            check=True, timeout=300, stdout=sys.stderr)
+        subprocess.run(install_args(python, uv), check=True, stdout=sys.stderr)
+        if selected['torch_backend']:
+            # uv tool's backend selector is experimental; uv pip's selector is stable.
+            subprocess.run([uv, 'pip', 'install', '--python', runtime,
+                'headroom-ai[ml]>=0.39.1', '--torch-backend', selected['torch_backend']],
+                check=True, stdout=sys.stderr)
+        subprocess.run([runtime, __file__, 'verify', selected['backend'],
+            selected['torch_backend'] or 'cpu'], check=True, timeout=300, stdout=sys.stderr)
     except (subprocess.SubprocessError, OSError) as exc:
         if selected['backend'] == 'onnx_cpu':
             raise
         print(f'Headroom accelerator setup failed ({exc}); reinstalling ONNX CPU.', file=sys.stderr)
         selected = dict(selected, backend='onnx_cpu', torch_backend=None,
                         reason='Accelerator installation or execution failed; verified ONNX CPU fallback.')
-        subprocess.run(install_args(selected, python, uv), check=True, stdout=sys.stderr)
-        subprocess.run([str(root / 'uv-tools/headroom-ai/bin/python'), __file__,
-            'verify', 'onnx_cpu', 'cpu'], check=True, timeout=300, stdout=sys.stderr)
+        subprocess.run(install_args(python, uv), check=True, stdout=sys.stderr)
+        subprocess.run([runtime, __file__, 'verify', 'onnx_cpu', 'cpu'],
+                       check=True, timeout=300, stdout=sys.stderr)
     return selected
 
 
@@ -81,6 +82,14 @@ def initialize_runtime():
     # Preserve the CLI's settings precedence and OS/additive certificate trust.
     from headroom import settings_store
     settings_store.apply_to_environ(settings_store.load())
+    if sys.platform == 'linux' and os.environ.get('HEADROOM_KOMPRESS_BACKEND') == 'pytorch' \
+            and 'AMDGPU_ASIC_ID_TABLE_PATH' not in os.environ:
+        # ROCm's bundled libdrm otherwise searches near Python and can print "(null)".
+        for path in ('/usr/share/libdrm/amdgpu.ids', '/opt/amdgpu/share/libdrm/amdgpu.ids',
+                     '/opt/rocm/share/libdrm/amdgpu.ids', '/usr/local/share/libdrm/amdgpu.ids'):
+            if Path(path).is_file() and os.access(path, os.R_OK):
+                os.environ['AMDGPU_ASIC_ID_TABLE_PATH'] = path
+                break
     from headroom.proxy.ssl_context import build_httpx_verify
     try:
         from headroom.proxy.ssl_context import ensure_process_trust

@@ -15,6 +15,29 @@ except ImportError:
 
 
 class HeadroomTests(unittest.TestCase):
+    def test_amd_ids_uses_readable_system_file_and_preserves_user_override(self):
+        key = 'AMDGPU_ASIC_ID_TABLE_PATH'
+        settings = SimpleNamespace(load=lambda: {}, apply_to_environ=lambda data: None)
+        tls = SimpleNamespace(ensure_process_trust=lambda: None,
+                              build_httpx_verify=lambda: ssl.create_default_context())
+        for backend, override, readable, expected in (
+                ('pytorch', None, True, '/usr/share/libdrm/amdgpu.ids'),
+                ('pytorch', '/custom/amdgpu.ids', True, '/custom/amdgpu.ids'),
+                ('pytorch', None, False, None), ('onnx_cpu', None, True, None)):
+            with self.subTest(backend=backend, override=override, readable=readable):
+                env = {'HEADROOM_KOMPRESS_BACKEND': backend}
+                if override is not None:
+                    env[key] = override
+                with patch.dict(h.os.environ, env, clear=True), patch.object(h.sys, 'platform', 'linux'), \
+                        patch.object(h.Path, 'is_file', return_value=True), \
+                        patch.object(h.os, 'access', return_value=readable), \
+                        patch.dict(sys.modules, {'headroom': SimpleNamespace(settings_store=settings),
+                            'headroom.proxy.ssl_context': tls,
+                            'huggingface_hub': SimpleNamespace(set_client_factory=lambda factory: None),
+                            'huggingface_hub.utils': SimpleNamespace(_http=None)}):
+                    h.initialize_runtime()
+                    self.assertEqual(h.os.environ.get(key), expected)
+
     def test_runtime_initializes_persisted_settings_and_system_tls_trust(self):
         self.assertTrue(callable(getattr(h, 'initialize_runtime', None)), 'Runtime bootstrap is missing')
         calls = []
@@ -71,10 +94,10 @@ class HeadroomTests(unittest.TestCase):
                 plan = h.plan(system, machine, vendors, detected)
                 self.assertEqual(plan['backend'], backend)
                 self.assertEqual(plan['torch_backend'], torch)
-                args = h.install_args(plan, '/python', '/uv')
+                args = h.install_args('/python', '/uv')
                 self.assertNotIn('headroom-ai[all]', args)
-                self.assertEqual('--torch-backend' in args, torch is not None)
-                self.assertEqual(any('[mcp,code,ml]' in x for x in args), torch is not None)
+                self.assertNotIn('--torch-backend', args)
+                self.assertFalse(any('[mcp,code,ml]' in x for x in args))
 
     def test_pci_detection_excludes_cpu_and_non_display_devices(self):
         self.assertIsNotNone(h)
@@ -111,8 +134,13 @@ class HeadroomTests(unittest.TestCase):
         with patch.object(h.subprocess, 'run', side_effect=run):
             final = h.install(gpu, '/python', '/uv', pathlib.Path('/toolkit'))
         self.assertEqual(final['backend'], 'onnx_cpu')
-        installs = [x for x in calls if 'install' in x]
+        installs = [x for x in calls if x[1:3] == ['tool', 'install']]
         self.assertEqual(len(installs), 2)
+        gpu_installs = [x for x in calls if x[1:3] == ['pip', 'install']]
+        self.assertEqual(len(gpu_installs), 1)
+        self.assertIn('--torch-backend', gpu_installs[0])
+        self.assertIn('rocm7.2', gpu_installs[0])
+        self.assertIn('/toolkit/uv-tools/headroom-ai/bin/python', gpu_installs[0])
         self.assertIn('--reinstall', installs[1])
         self.assertNotIn('--torch-backend', installs[1])
         self.assertFalse(any('[mcp,code,ml]' in x for x in installs[1]))
