@@ -17,17 +17,21 @@ except ImportError:
 class HeadroomTests(unittest.TestCase):
     def test_amd_ids_uses_readable_system_file_and_preserves_user_override(self):
         key = 'AMDGPU_ASIC_ID_TABLE_PATH'
-        settings = SimpleNamespace(load=lambda: {}, apply_to_environ=lambda data: None)
+        dirs_key = 'AMDGPU_ASIC_ID_TABLE_PATHS'
+        observed = []
+        def load_settings():
+            observed.append({k: h.os.environ[k] for k in (key, dirs_key) if k in h.os.environ})
+            return {}
+        settings = SimpleNamespace(load=load_settings, apply_to_environ=lambda data: None)
         tls = SimpleNamespace(ensure_process_trust=lambda: None,
                               build_httpx_verify=lambda: ssl.create_default_context())
         for backend, override, readable, expected in (
-                ('pytorch', None, True, '/usr/share/libdrm/amdgpu.ids'),
-                ('pytorch', '/custom/amdgpu.ids', True, '/custom/amdgpu.ids'),
-                ('pytorch', None, False, None), ('onnx_cpu', None, True, None)):
+                ('pytorch', {}, True, {key: '/usr/share/libdrm/amdgpu.ids', dirs_key: '/usr/share/libdrm'}),
+                ('pytorch', {key: '/custom/amdgpu.ids'}, True, {key: '/custom/amdgpu.ids'}),
+                ('pytorch', {dirs_key: '/custom/a:/custom/b'}, True, {dirs_key: '/custom/a:/custom/b'}),
+                ('pytorch', {}, False, {}), ('onnx_cpu', {}, True, {})):
             with self.subTest(backend=backend, override=override, readable=readable):
-                env = {'HEADROOM_KOMPRESS_BACKEND': backend}
-                if override is not None:
-                    env[key] = override
+                env = {'HEADROOM_KOMPRESS_BACKEND': backend, **override}
                 with patch.dict(h.os.environ, env, clear=True), patch.object(h.sys, 'platform', 'linux'), \
                         patch.object(h.Path, 'is_file', return_value=True), \
                         patch.object(h.os, 'access', return_value=readable), \
@@ -36,7 +40,9 @@ class HeadroomTests(unittest.TestCase):
                             'huggingface_hub': SimpleNamespace(set_client_factory=lambda factory: None),
                             'huggingface_hub.utils': SimpleNamespace(_http=None)}):
                     h.initialize_runtime()
-                    self.assertEqual(h.os.environ.get(key), expected)
+                    actual = {k: h.os.environ[k] for k in (key, dirs_key) if k in h.os.environ}
+                    self.assertEqual(actual, expected)
+                    self.assertEqual(observed[-1], expected, 'Configure libdrm before importing Headroom settings')
 
     def test_runtime_initializes_persisted_settings_and_system_tls_trust(self):
         self.assertTrue(callable(getattr(h, 'initialize_runtime', None)), 'Runtime bootstrap is missing')

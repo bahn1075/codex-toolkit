@@ -284,7 +284,7 @@ PyTorch 환경의 마지막 인자는 기록된 `torch_backend`로 바꿉니다.
 | 메시지 | 원인과 처리 |
 |---|---|
 | uv `--torch-backend` experimental | `uv tool install`의 GPU 선택 옵션에서 발생합니다. toolkit은 기본 환경 설치 후 안정화된 `uv pip install --torch-backend`로 GPU 의존성을 추가합니다. |
-| ROCm `(null): No such file or directory` | PyTorch에 포함된 libdrm이 GPU 이름 표 `amdgpu.ids`를 찾지 못할 때 발생할 수 있습니다. Linux PyTorch 모드에서 기존 표 파일을 찾아 `AMDGPU_ASIC_ID_TABLE_PATH`를 지정합니다. 사용자 지정 값은 보존하며, 표가 없으면 파일을 만들거나 경고를 숨기지 않습니다. |
+| ROCm `(null): No such file or directory` | PyTorch에 포함된 libdrm이 GPU 이름 표 `amdgpu.ids`를 찾지 못할 때 발생할 수 있습니다. Headroom import 전에 기존 표 파일을 찾아 구형용 `AMDGPU_ASIC_ID_TABLE_PATH`에는 파일 경로, 신형용 `AMDGPU_ASIC_ID_TABLE_PATHS`에는 디렉터리를 지정합니다. 사용자가 어느 변수를 지정했든 자동 설정은 생략합니다. 표가 없으면 파일을 만들거나 경고를 숨기지 않습니다. |
 | ModernBERT `UNEXPECTED` (`decoder.bias`, `head.dense.weight`, `head.norm.weight`) | 사전학습용 마스크 예측 헤드를 인코더 모델에서 사용하지 않아 발생하는 정상 로딩 보고입니다. Headroom 압축용 가중치는 이후 별도로 로드합니다. 다른 키의 누락·크기 불일치와 추론 오류까지 무시해도 된다는 뜻은 아닙니다. |
 | VS Code `DEP0169` | VS Code CLI 내부 `url.parse()` 사용에 대한 Node 경고입니다. 기존 확장의 불필요한 설치 호출은 생략합니다. 새 확장 설치 시 같은 경고가 남으면 VS Code 업데이트가 필요할 수 있습니다. |
 
@@ -297,6 +297,21 @@ PyTorch 환경의 마지막 인자는 기록된 `torch_backend`로 바꿉니다.
 [ModernBERT 원본 구성](https://huggingface.co/answerdotai/ModernBERT-base/blob/main/config.json),
 [VS Code 경고 보고](https://github.com/microsoft/vscode/issues/326998),
 [Codex 인증 안내](https://learn.chatgpt.com/docs/auth).
+
+`e5c37a6`은 구형 변수만 설정하여 신형 libdrm에서 적용되지 않을 수 있었습니다.
+수정된 `verify`는 `ROCm ASIC IDs: file=...; directories=...`도 출력합니다.
+두 값이 `None`이면 표 파일 부재 또는 사용자 환경 설정을 먼저 확인해야 합니다.
+신형 인터페이스의 디렉터리 목록 형식은
+[libdrm 변경 내역](https://sourceforge.net/p/dri/mailman/dri-patches/thread/20251022031032.086A9761FB%40kemper.freedesktop.org/?page=1)에서 확인할 수 있습니다.
+
+이미 `e5c37a6`으로 설치를 마쳤다면 저장소에서 다음과 같이 Headroom 실행 파일만 갱신하고
+검사할 수 있습니다. 다음 Codex/VS Code 재시작부터 MCP에도 적용됩니다.
+
+```bash
+git pull --ff-only
+cp headroom_setup.py ~/.codex/toolkit/bundle/headroom_setup.py
+~/.codex/toolkit/bin/codex-doctor
+```
 
 ## 모델 API URL만 재설정
 

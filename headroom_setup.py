@@ -79,17 +79,20 @@ def install(selected, python, uv, root):
 
 
 def initialize_runtime():
-    # Preserve the CLI's settings precedence and OS/additive certificate trust.
-    from headroom import settings_store
-    settings_store.apply_to_environ(settings_store.load())
     if sys.platform == 'linux' and os.environ.get('HEADROOM_KOMPRESS_BACKEND') == 'pytorch' \
-            and 'AMDGPU_ASIC_ID_TABLE_PATH' not in os.environ:
-        # ROCm's bundled libdrm otherwise searches near Python and can print "(null)".
+            and not any(key in os.environ for key in
+                        ('AMDGPU_ASIC_ID_TABLE_PATH', 'AMDGPU_ASIC_ID_TABLE_PATHS')):
+        # Old libdrm expects one file; newer ROCm builds expect a directory search list.
+        # Set both before importing Headroom, which may initialize native libraries.
         for path in ('/usr/share/libdrm/amdgpu.ids', '/opt/amdgpu/share/libdrm/amdgpu.ids',
                      '/opt/rocm/share/libdrm/amdgpu.ids', '/usr/local/share/libdrm/amdgpu.ids'):
             if Path(path).is_file() and os.access(path, os.R_OK):
                 os.environ['AMDGPU_ASIC_ID_TABLE_PATH'] = path
+                os.environ['AMDGPU_ASIC_ID_TABLE_PATHS'] = str(Path(path).parent)
                 break
+    # Preserve the CLI's settings precedence and OS/additive certificate trust.
+    from headroom import settings_store
+    settings_store.apply_to_environ(settings_store.load())
     from headroom.proxy.ssl_context import build_httpx_verify
     try:
         from headroom.proxy.ssl_context import ensure_process_trust
@@ -109,6 +112,10 @@ async def verify(backend, torch_backend):
     os.environ.update(HEADROOM_KOMPRESS_BACKEND=backend, HEADROOM_MCP_READ='on',
                       HEADROOM_MODE='token', HEADROOM_SAVINGS_PROFILE='balanced')
     initialize_runtime()
+    if backend == 'pytorch' and torch_backend.startswith('rocm'):
+        print('ROCm ASIC IDs: file=' + str(os.environ.get('AMDGPU_ASIC_ID_TABLE_PATH'))
+              + '; directories=' + str(os.environ.get('AMDGPU_ASIC_ID_TABLE_PATHS')),
+              file=sys.stderr)
     if backend == 'pytorch':
         import torch
         if torch_backend.startswith('rocm'):
