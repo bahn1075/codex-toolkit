@@ -341,7 +341,7 @@ def configure_mem0_hooks():
     path = CODEX / 'hooks.json'
     doc = json.loads(path.read_text()) if path.exists() else {}
     hooks = doc.setdefault('hooks', {})
-    for event in ('SessionStart', 'SessionEnd'):
+    for event in ('SessionStart', 'Stop', 'SessionEnd'):
         groups = hooks.setdefault(event, [])
         for group in groups:
             group['hooks'] = [h for h in group['hooks'] if h.get('command') != command]

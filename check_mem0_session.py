@@ -1,7 +1,11 @@
 """Run with ~/.codex/toolkit/venv/bin/python check_mem0_session.py (no network)."""
+import contextlib
+import io
 import json
 import fcntl
 from pathlib import Path
+import runpy
+import sys
 import tempfile
 from unittest.mock import patch
 import uuid
@@ -49,9 +53,9 @@ with tempfile.TemporaryDirectory() as tmp:
     def event(kind, text, **kwargs):
         append('event_msg', {'type': kind, 'message': text, **kwargs})
 
-    def queue():
+    def queue(hook_event='SessionEnd'):
         with patch.object(s.subprocess, 'Popen') as spawn:
-            s.enqueue({'hook_event_name': 'SessionEnd', 'session_id': session,
+            s.enqueue({'hook_event_name': hook_event, 'session_id': session,
                        'transcript_path': str(transcript)})
             assert spawn.call_args.kwargs['start_new_session'] is True
         return next(state.glob('*.job.json'))
@@ -83,23 +87,39 @@ with tempfile.TemporaryDirectory() as tmp:
             patch.object(s, 'extract_task_memories', side_effect=lambda store, messages, previous=None, **kwargs: [{
                 'text': messages[0]['content'] + ' ' + messages[-1]['content'],
                 'continuation': False}]) as extract:
-        s.process_job(queue(), lambda: store)
+        s.process_job(queue('Stop'), lambda: store)
         assert [row['memory'] for row in store.rows.values()] == ['Project uses Oracle. Confirmed Oracle.']
         assert (state / f'{session}.cursor.json').stat().st_mode & 0o777 == 0o600
-        s.process_job(queue(), lambda: store)
-        assert store.calls == 1  # Same session end does not resubmit anything.
+        s.process_job(queue('Stop'), lambda: store)
+        assert store.calls == 1  # Repeated Stop does not resubmit anything.
 
         event('user_message', 'Resumed project uses Python.')
         event('agent_message', 'Python check passed.', phase='final_answer')
-        s.process_job(queue(), lambda: store)
+        s.process_job(queue('Stop'), lambda: store)
         assert extract.call_args.args[1] == [
             {'role': 'user', 'content': 'Resumed project uses Python.'},
             {'role': 'final', 'content': 'Python check passed.'}]
         assert store.calls == 2
+        s.process_job(queue(), lambda: store)
+        assert store.calls == 2  # SessionEnd after Stop does not duplicate the requests.
+
+        # The command hook must return JSON without asking Codex to continue the turn.
+        cli_transcript = home / '.codex/sessions/test.jsonl'
+        cli_transcript.parent.mkdir(parents=True)
+        cli_transcript.write_bytes(transcript.read_bytes())
+        output = io.StringIO()
+        with patch.object(Path, 'home', return_value=home), \
+                patch.object(sys, 'argv', ['mem0_session.py']), \
+                patch.object(sys, 'stdin', io.StringIO(json.dumps({
+                    'hook_event_name': 'Stop', 'session_id': session,
+                    'transcript_path': str(cli_transcript)}))), \
+                patch.object(s.subprocess, 'Popen'), contextlib.redirect_stdout(output):
+            runpy.run_path(str(Path(s.__file__)), run_name='__main__')
+        assert json.loads(output.getvalue()) == {}
 
         event('user_message', 'Retry this fact.')
         event('agent_message', 'Retry completed.', phase='final_answer')
-        job = queue()
+        job = queue('Stop')
         old_cursor = (state / f'{session}.cursor.json').read_bytes()
         store.fail = True
         try:
@@ -163,7 +183,8 @@ with tempfile.TemporaryDirectory() as tmp:
             s.drain()
 
     hooks = home / 'hooks.json'
-    hooks.write_text(json.dumps({'hooks': {'SessionEnd': [{'hooks': [{'type': 'command', 'command': 'other'}]}]}}))
+    hooks.write_text(json.dumps({'hooks': {event: [{'hooks': [{'type': 'command', 'command': 'other'}]}]
+                                         for event in ('SessionEnd', 'Stop')}}))
     with patch.object(c, 'CODEX', home), patch.object(c, 'HOME', home), patch.object(c, 'ROOT', home / 'toolkit'), \
             patch.dict(c.os.environ, XDG_CONFIG_HOME=''), \
             patch.object(c.sys, 'platform', 'linux'), \
@@ -175,7 +196,13 @@ with tempfile.TemporaryDirectory() as tmp:
         first = hooks.read_text()
         c.configure_mem0_hooks()
         assert hooks.read_text() == first
-        assert json.loads(first)['hooks']['SessionEnd'][0]['hooks'][0]['command'] == 'other'
+        configured = json.loads(first)['hooks']
+        for hook_event in ('SessionStart', 'Stop', 'SessionEnd'):
+            managed = [hook for group in configured[hook_event] for hook in group['hooks']
+                       if hook['command'] == '/tools/mem0-session']
+            assert len(managed) == 1 and managed[0]['timeout'] == 3
+        for hook_event in ('SessionEnd', 'Stop'):
+            assert configured[hook_event][0]['hooks'][0]['command'] == 'other'
         units = home / '.config/systemd/user'
         assert (units / 'codex-mem0-retry.timer').exists(), 'Install a reboot-safe retry timer'
         assert 'OnUnitInactiveSec=2min' in (units / 'codex-mem0-retry.timer').read_text()

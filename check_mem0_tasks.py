@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     def queue():
         with patch.object(session_import.subprocess, 'Popen'):
-            session_import.enqueue({'hook_event_name': 'SessionEnd',
+            session_import.enqueue({'hook_event_name': 'Stop',
                                     'session_id': session_id, 'transcript_path': str(transcript)})
         return next(state.glob('*.job.json'))
 

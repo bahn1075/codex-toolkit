@@ -318,7 +318,7 @@ finish() {
   printf '%s\n' \
     'Open a new terminal (or restart VS Code). Login status: codex login status' \
     'Run codex and start a new thread; Mem0 is available through /mcp.' \
-    'Review and trust the Mem0 SessionStart/SessionEnd hooks in /hooks to enable automatic session memory.' \
+    'Review and trust the Mem0 SessionStart/Stop/SessionEnd hooks in /hooks to save memory after each completed request.' \
     'MCP visibility: /mcp. Connection test: ~/.codex/toolkit/bin/codex-doctor' \
     'Update later: bash ~/.codex/toolkit/bundle/update.sh'
 }

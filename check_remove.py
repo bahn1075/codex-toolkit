@@ -60,8 +60,9 @@ command = "{root}-custom/bin/graft"
     rc_target.parent.mkdir()
     rc_target.write_text('export USER_SETTING=keep\n# BEGIN CODEX-TOOLKIT\nmanaged\n# END CODEX-TOOLKIT\n')
     (home / '.bashrc').symlink_to(rc_target)
-    (codex / 'hooks.json').write_text(json.dumps({'hooks': {'SessionEnd': [{'hooks': [
-        {'command': f"'{root}/bin/mem0-session'"}, {'command': '/keep/hook'}]}]}}))
+    (codex / 'hooks.json').write_text(json.dumps({'hooks': {event: [{'hooks': [
+        {'command': f"'{root}/bin/mem0-session'"}, {'command': '/keep/hook'}]}]
+        for event in ('SessionEnd', 'Stop')}}))
     (codex / 'auth.json').write_text('keep authentication')
     (codex / 'mem0.json').write_text('private configuration')
     (codex / 'sessions').mkdir()
@@ -86,7 +87,8 @@ command = "{root}-custom/bin/graft"
     assert rc_target.read_text() == 'export USER_SETTING=keep\n'
     assert (codex / 'AGENTS.md').read_text().strip() == 'User notes'
     hooks = json.loads((codex / 'hooks.json').read_text())
-    assert hooks['hooks']['SessionEnd'][0]['hooks'] == [{'command': '/keep/hook'}]
+    for event in ('SessionEnd', 'Stop'):
+        assert hooks['hooks'][event][0]['hooks'] == [{'command': '/keep/hook'}]
     backups = list((home / '.codex-backups').glob('remove-*'))
     assert len(backups) == 1
     assert (backups[0] / 'mem0.json').read_text() == 'private configuration'

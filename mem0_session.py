@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Queue SessionEnd work quickly; checkpoint only successfully stored transcript ranges."""
+"""Queue completed-turn/session work; checkpoint only successfully stored transcript ranges."""
 import fcntl
 import contextlib
 import hashlib
@@ -79,18 +79,18 @@ def complete_end(path, include_valid_tail=False):
 
 
 def enqueue(event):
-    if event.get('hook_event_name') not in ('SessionStart', 'SessionEnd'):
-        raise ValueError('Expected SessionStart or SessionEnd')
-    if event['hook_event_name'] == 'SessionEnd':
+    if event.get('hook_event_name') not in ('SessionStart', 'Stop', 'SessionEnd'):
+        raise ValueError('Expected SessionStart, Stop or SessionEnd')
+    if event['hook_event_name'] in ('Stop', 'SessionEnd'):
         STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
         session = str(uuid.UUID(event['session_id']))
         if not event.get('transcript_path'):
-            raise ValueError('SessionEnd has no transcript_path')
+            raise ValueError(f"{event['hook_event_name']} has no transcript_path")
         path = Path(event['transcript_path']).resolve(strict=True)
         roots = (HOME / 'sessions', HOME / 'archived_sessions')
         if not any(path.is_relative_to(root.resolve()) for root in roots):
             raise ValueError('Transcript is outside Codex session directories')
-        # Only enqueue complete JSONL records; a later end event picks up a partial tail.
+        # Only enqueue complete JSONL records; a later Stop/SessionEnd picks up a partial tail.
         end = complete_end(path)
         if not end:
             raise ValueError('Transcript contains no complete records')
@@ -263,7 +263,7 @@ def batches(path, session, checkpoint, end, include_valid_tail=False):
             raw = transcript.readline()
             if not raw or transcript.tell() > end or (
                     not raw.endswith(b'\n') and not (include_valid_tail and transcript.tell() == end)):
-                raise ValueError('Incomplete transcript record; retry after the next SessionEnd')
+                raise ValueError('Incomplete transcript record; retry after the next Stop or SessionEnd')
             record = json.loads(raw)
             digest.update(raw)
             message = task_message(record)
@@ -384,6 +384,9 @@ if __name__ == '__main__':
     if sys.argv[1:] == ['--drain']:
         drain()
     elif not sys.argv[1:]:
-        enqueue(json.load(sys.stdin))
+        event = json.load(sys.stdin)
+        enqueue(event)
+        if event['hook_event_name'] == 'Stop':
+            print('{}')
     else:
         raise SystemExit('Usage: mem0_session.py [--drain]')
