@@ -178,7 +178,7 @@ bootstrap() {
   mkdir -p "$CT_ROOT/bin" "$CT_ROOT/repos" "$CT_ROOT/logs" "$CT_ROOT/bundle"
   # Keep the installer/update bundle available after the downloaded copy is removed.
   if [ "$SCRIPT_DIR" != "$CT_ROOT/bundle" ]; then
-    for ct_file in setup.sh update.sh remove.sh remove.py toolkit.sh configure.py headroom_setup.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_headroom.py check_preflight.py check_configure.py check_remove.py check_mem0_session.py check_mem0_tasks.py check_model_api.py check_llm.py; do
+    for ct_file in setup.sh update.sh remove.sh remove.py toolkit.sh configure.py headroom_setup.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_headroom.py check_preflight.py check_configure.py check_remove.py check_mem0_session.py check_mem0_tasks.py check_mem0_chunks.py check_model_api.py check_llm.py; do
       cp "$SCRIPT_DIR/$ct_file" "$CT_ROOT/bundle/$ct_file"
     done
     mkdir -p "$CT_ROOT/bundle/mem0_import"
