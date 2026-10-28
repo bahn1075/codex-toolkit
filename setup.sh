@@ -7,21 +7,12 @@ source "$SCRIPT_DIR/toolkit.sh"
 case "${1:-}" in
   --help|-h) usage; exit 0 ;;
   --llm) configure_llm; exit 0 ;;
-  --resume) RESET=0 ;;
-  '') RESET=1 ;;
+  --resume|'') ;;
   *) die "Unknown option: $1" ;;
 esac
 preflight
 acquire_lock
-if [ "$RESET" = 1 ]; then
-  reset_codex
-else
-  if [ ! -f "$CT_ROOT/install-state.json" ]; then
-    # Bootstrap can fail before even creating the venv (e.g. Portable Ruby download).
-    [ -f "$CT_HOME/previous-home.txt" ] \
-      || die 'No previous toolkit setup to resume.'
-  fi
-fi
+snapshot_configuration
 bootstrap
 install_packages
 configure_core

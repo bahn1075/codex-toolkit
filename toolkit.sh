@@ -24,8 +24,8 @@ note() { printf '\n%s\n' "$*"; }
 usage() {
   cat <<'EOF'
 Usage: bash setup.sh [--resume|--llm]
-Default: archive ~/.codex, reinstall Codex, install/configure toolkit tools and Superpowers.
---resume: continue/reconcile without resetting config, login or history.
+Default: preserve ~/.codex, install/update Codex and configure toolkit tools and Superpowers.
+--resume: rerun setup with the same data-preserving behavior.
 --llm: validate and save only inference/embedding primary and secondary URLs.
 Close Codex, Codex app and VS Code before running. Do not run with sudo.
 Optional environment settings (first installation):
@@ -86,7 +86,7 @@ preflight() {
   [ "$HOME" != / ] || die 'Refusing root HOME.'
   case "$HOME$SCRIPT_DIR" in *$'\n'*|*$'\r'*) die 'Newlines in paths are unsupported.' ;; esac
   case "$SCRIPT_DIR/" in "$CT_HOME/"*) die 'Extract this bundle outside ~/.codex before setup.' ;; esac
-  [ ! -L "$CT_HOME" ] || die '~/.codex is a symlink; resolve its intended target before resetting.'
+  [ ! -L "$CT_HOME" ] || die '~/.codex is a symlink; resolve its intended target before setup.'
   for ct_cmd in brew curl git bun; do
     command -v "$ct_cmd" >/dev/null || die "Required command missing: $ct_cmd"
   done
@@ -118,31 +118,6 @@ cleanup() {
 remove_homebrew_codex() {
   if "$CT_BREW" list --formula codex >/dev/null 2>&1; then "$CT_BREW" uninstall --formula codex; fi
   if "$CT_BREW" list --cask codex >/dev/null 2>&1; then "$CT_BREW" uninstall --cask codex; fi
-}
-reset_codex() {
-  CT_STAGE=reset
-  note 'Archiving the previous Codex home; creating a clean ~/.codex.'
-  mkdir -p "$CT_BACKUPS"
-  chmod 700 "$CT_BACKUPS"
-  CT_BACKUP=$(mktemp -d "$CT_BACKUPS/reset-$(date +%Y%m%d-%H%M%S)-XXXXXX")
-  # Remove only a deployment created by this toolkit, before its managed config moves.
-  if [ -f "$CT_ROOT/install-state.json" ] && [ -x "$CT_ROOT/bin/headroom" ]; then
-    if [ -f "$HOME/.headroom/deploy/codex-toolkit/manifest.json" ]; then
-      "$CT_ROOT/bin/headroom" install remove --profile codex-toolkit
-    fi
-  fi
-  if [ -d "$CT_HOME" ]; then mv "$CT_HOME" "$CT_BACKUP/codex"; fi
-  mkdir -p "$CT_HOME"
-  chmod 700 "$CT_HOME"
-  # Clear existing OS-credential-store login where an actual executable is available.
-  ct_old_codex=$(type -P codex || true)
-  if [ -n "$ct_old_codex" ]; then
-    "$ct_old_codex" logout || printf '%s\n' 'Previous Codex logout failed; new setup will use a fresh file credential store.' >&2
-  fi
-  printf '%s\n' "$CT_BACKUP" > "$CT_HOME/previous-home.txt"
-  # Remove only the active npm prefix's Codex package. Other prefixes are reported later.
-  if command -v npm >/dev/null && [ -d "$(npm root -g)/@openai/codex" ]; then npm uninstall -g @openai/codex; fi
-  remove_homebrew_codex
 }
 python_compatible() {
   "$1" -c 'import ctypes, sqlite3, ssl, sys, tomllib, venv
@@ -178,7 +153,7 @@ bootstrap() {
   mkdir -p "$CT_ROOT/bin" "$CT_ROOT/repos" "$CT_ROOT/logs" "$CT_ROOT/bundle"
   # Keep the installer/update bundle available after the downloaded copy is removed.
   if [ "$SCRIPT_DIR" != "$CT_ROOT/bundle" ]; then
-    for ct_file in setup.sh update.sh remove.sh remove.py toolkit.sh configure.py headroom_setup.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_headroom.py check_preflight.py check_configure.py check_remove.py check_mem0_session.py check_mem0_tasks.py check_mem0_chunks.py check_model_api.py check_llm.py; do
+    for ct_file in setup.sh update.sh remove.sh remove.py toolkit.sh check_setup.py configure.py headroom_setup.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_headroom.py check_preflight.py check_configure.py check_remove.py check_mem0_session.py check_mem0_tasks.py check_mem0_chunks.py check_model_api.py check_llm.py; do
       cp "$SCRIPT_DIR/$ct_file" "$CT_ROOT/bundle/$ct_file"
     done
     mkdir -p "$CT_ROOT/bundle/mem0_import"
@@ -206,7 +181,7 @@ snapshot_configuration() {
   for ct_file in config.toml AGENTS.md hooks.json; do
     if [ -f "$CT_HOME/$ct_file" ]; then cp -p "$CT_HOME/$ct_file" "$CT_BACKUP/"; fi
   done
-  cp "$CT_ROOT/install-state.json" "$CT_BACKUP/"
+  if [ -f "$CT_ROOT/install-state.json" ]; then cp -p "$CT_ROOT/install-state.json" "$CT_BACKUP/"; fi
   if [ -f "$CT_ROOT/npm/package-lock.json" ]; then cp "$CT_ROOT/npm/package-lock.json" "$CT_BACKUP/"; fi
 }
 install_packages() {

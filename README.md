@@ -17,9 +17,8 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 
 ## 설치 전 확인
 
-> [!WARNING]
-> 기본 설치는 기존 `~/.codex`를 `~/.codex-backups/reset-*`으로 옮긴 뒤 새로
-> 구성합니다. 기존 로그인·대화·전역 설정이 새 환경에 자동 병합되지는 않습니다.
+> 기존 `~/.codex`의 로그인과 대화 기록을 유지하며 Codex와 툴킷을 설치·갱신합니다.
+> 변경할 전역 설정은 `~/.codex-backups/update-*`에 백업합니다.
 > 프로젝트 안의 `.codex/config.toml`과 `AGENTS.md`는 건드리지 않습니다.
 
 - 지원 환경: macOS 또는 Linux, Bash 3.2 이상
@@ -42,7 +41,7 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 
 | 명령 | 용도 |
 |---|---|
-| `bash setup.sh` | 최초 설치 또는 완전 초기화. 기존 `~/.codex`를 백업한 뒤 새로 구성 |
+| `bash setup.sh` | 기존 로그인·대화 기록을 유지하며 설치 또는 갱신 |
 | `bash setup.sh --resume` | 기존 `~/.codex`를 유지하면서 실패·누락된 설치와 설정을 다시 맞춤 |
 | `bash update.sh` | 설치된 툴킷과 패키지를 업데이트하고 설정을 재적용 |
 | `bash remove.sh --dry-run` | 삭제 대상과 실행할 제거 명령만 확인 |
@@ -96,8 +95,8 @@ codex plugin add superpowers@openai-curated-remote
 
 ### `--resume`의 역할
 
-`--resume`은 실패한 한 줄에서 그대로 이어가는 옵션이 아니라, **초기화를 생략하고
-설치 전체를 다시 조정하는 복구 모드**입니다.
+`--resume`은 실패한 한 줄에서 그대로 이어가는 옵션이 아니라, 기본 설치와 같이
+기존 데이터를 유지하며 설치 전체를 다시 조정하는 복구 모드입니다.
 
 - `~/.codex`를 이동하거나 새로 만들지 않아 로그인, 대화 기록과 사용자 설정을 유지합니다.
 - 설치 상태를 재사용하면서 패키지, MCP 실행 경로, 전역 지침과 hook을 다시 확인합니다.
@@ -123,8 +122,7 @@ bash setup.sh --resume
 bash ~/.codex/toolkit/bundle/setup.sh --resume
 ```
 
-아직 한 번도 설치하지 않아 설치 상태나 초기 백업 표식이 없으면 `--resume`은 사용할
-수 없습니다. 이 경우 `bash setup.sh`로 시작해야 합니다.
+설치 상태가 아직 없는 경우에도 `--resume`으로 다시 시작할 수 있습니다.
 
 ### 설치 후 Mem0 설정 완료
 
@@ -359,6 +357,7 @@ secondary로 재시도합니다. 각 서버에서 현재 로드된 모델을 사
 ```bash
 python3 check_preflight.py
 ~/.codex/toolkit/venv/bin/python -m unittest check_headroom
+~/.codex/toolkit/venv/bin/python check_setup.py
 ~/.codex/toolkit/venv/bin/python check_configure.py
 ~/.codex/toolkit/venv/bin/python check_remove.py
 ~/.codex/toolkit/venv/bin/python check_mem0_session.py

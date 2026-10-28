@@ -23,7 +23,7 @@ with tempfile.TemporaryDirectory() as tmp:
         'source ' + shlex.quote(str(source / 'toolkit.sh')) + '\n'
         'CT_HOME="$SCRIPT_DIR/home"\nCT_ROOT="$CT_HOME/toolkit"\n'
         'preflight() { :; }\nacquire_lock() { :; }\n'
-        'reset_codex() { exit 99; }\nbootstrap() { echo RESUMED; }\n'
+        'bootstrap() { echo RESUMED; }\nsnapshot_configuration() { :; }\n'
         + ''.join(name + '() { :; }\n' for name in (
             'install_packages', 'configure_core', 'install_mem0',
             'configure_headroom', 'install_plugins', 'finish')))
@@ -34,8 +34,8 @@ with tempfile.TemporaryDirectory() as tmp:
         if has_marker:
             marker.write_text('/previous-backup\n')
         result = subprocess.run(['bash', str(root / 'setup.sh'), '--resume'], capture_output=True, text=True)
-        assert (result.returncode == 0) == has_marker
-        assert ('RESUMED' in result.stdout) == has_marker
+        assert result.returncode == 0, result.stderr
+        assert 'RESUMED' in result.stdout
         assert not (home / 'toolkit/venv').exists()
 
 
