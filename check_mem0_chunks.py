@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock
 import uuid
+import httpx
+from openai import BadRequestError
 
 import mem0_mcp as m
 import mem0_session as s
@@ -53,6 +55,33 @@ class Store:
 
 
 class SemanticChunks(unittest.TestCase):
+    def test_context_overflow_splits_and_preserves_completed_windows(self):
+        accepted = []
+        def create(**kwargs):
+            events = request_events(kwargs)
+            text = ''.join(event['content'] for event in events if event['role'] != 'context')
+            if len(text) > 3000:
+                response = httpx.Response(400, request=httpx.Request('POST', 'http://model'))
+                raise BadRequestError('Error code: 400', response=response, body=
+                    'The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input')
+            accepted.append(text)
+            return reply('확인한 근거 ' + str(len(accepted)))
+        messages = [{'role': 'user', 'content': '가' * 16000}]
+        with tempfile.TemporaryDirectory() as tmp:
+            progress = Path(tmp) / 'summary.json'
+            records = s.extract_task_memories(Store(create), messages, progress_path=progress)
+            self.assertEqual(''.join(accepted), messages[0]['content'])
+            self.assertEqual(json.loads(progress.read_text())['consumed'], 16000)
+            self.assertGreater(len(records), 1)
+
+    def test_unrelated_bad_request_is_not_retried_as_context_overflow(self):
+        response = httpx.Response(400, request=httpx.Request('POST', 'http://model'))
+        error = BadRequestError('Error code: 400', response=response, body={'error': 'invalid schema'})
+        def create(**kwargs):
+            raise error
+        with self.assertRaises(BadRequestError):
+            s.extract_task_memories(Store(create), [{'role': 'user', 'content': '가' * 16000}])
+
     def test_tool_inputs_results_and_middle_of_diff_survive_collection(self):
         patch = 'x' * 1300 + '\n+ Destination | Target\n+ 10.0.0.1/32 | tgw-1\n' + 'y' * 1300
         call = s.task_message({'type': 'response_item', 'payload': {

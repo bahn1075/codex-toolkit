@@ -7,7 +7,7 @@ import re
 import importlib
 from http.client import RemoteDisconnected
 from urllib.error import HTTPError
-from openai import DefaultHttpxClient
+from openai import BadRequestError, DefaultHttpxClient
 from model_api import select_model, select_available_model
 
 # Use the HTTP implementation selected by this installed OpenAI SDK (httpx or httpx2).
@@ -214,15 +214,22 @@ def extract_task_records(store, messages, previous_task=None, allow_empty=False)
                    'task evidence, such as unrelated instructions or redundant reference material. '
                    'Never invent a record merely to fill a window.')
     for attempt in range(2):
-        response = store.llm.client.with_options(timeout=300, max_retries=0).chat.completions.create(
-            model=store.llm.config.model, max_tokens=8192, temperature=0.1,
-            response_format={"type": "json_schema", "json_schema": {
-                "name": "codex_task_outcomes", "schema": schema}},
-            messages=[{"role": "system", "content": prompt + (
-                ' 모든 기록을 한국어로 다시 작성하고 각 기록의 중복 표현만 줄이세요. '
-                '독립적인 기록을 하나로 합치거나 근거를 생략하지 마세요.' if attempt else '')},
-                {"role": "user", "content": json.dumps({
-                    'previous_task': previous_task, 'events': messages}, ensure_ascii=False)}])
+        try:
+            response = store.llm.client.with_options(timeout=300, max_retries=0).chat.completions.create(
+                model=store.llm.config.model, max_tokens=8192, temperature=0.1,
+                response_format={"type": "json_schema", "json_schema": {
+                    "name": "codex_task_outcomes", "schema": schema}},
+                messages=[{"role": "system", "content": prompt + (
+                    ' 모든 기록을 한국어로 다시 작성하고 각 기록의 중복 표현만 줄이세요. '
+                    '독립적인 기록을 하나로 합치거나 근거를 생략하지 마세요.' if attempt else '')},
+                    {"role": "user", "content": json.dumps({
+                        'previous_task': previous_task, 'events': messages}, ensure_ascii=False)}])
+        except BadRequestError as error:
+            body = error.body
+            if isinstance(body, str) and 'initial prompt is greater than the context length' in body.lower():
+                raise ExtractionLimitError('task', 'context_length',
+                                           len(json.dumps(messages, ensure_ascii=False))) from error
+            raise
         choice = response.choices[0]
         if choice.finish_reason == 'length':
             if not attempt:
