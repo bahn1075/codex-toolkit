@@ -246,6 +246,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (wallet / 'tnsnames.ora').write_text('demo_medium = (DESCRIPTION=...)\n')
     target = Path(tmp) / 'mem0.json'
     with patch.object(c, 'MEM0_CONFIG', target), \
+            patch.object(c, 'model_choice', return_value='local'), \
             patch.object(c, 'select_model', side_effect=lambda url, kind: ('http://server/v1', 'served-' + kind)), \
             patch('builtins.input', side_effect=[
                 str(wallet), 'dbuser', 'demo_medium',
@@ -274,6 +275,7 @@ with tempfile.TemporaryDirectory() as tmp:
         'embedding_api_url': 'http://embedding.example/api/v1/embedding',
     }))
     with patch.object(c, 'MEM0_CONFIG', target), \
+            patch.object(c, 'model_choice', return_value='local'), \
             patch.object(c, 'select_model', side_effect=lambda url, kind: ('http://server/v1', 'served-' + kind)), \
             patch('builtins.input', side_effect=['', 'http://secondary.example/v1/chat/completions',
                 'https://new.example/api/v1/embeddings', 'http://secondary.example/v1/embeddings']), \
@@ -301,6 +303,7 @@ with tempfile.TemporaryDirectory() as tmp:
     failed = subprocess.CompletedProcess([], 7, '', 'curl: (7) Connection refused')
     succeeded = subprocess.CompletedProcess([], 0, model_response, '')
     with patch.object(c, 'MEM0_CONFIG', target), \
+            patch.object(c, 'model_choice', return_value='local'), \
             patch.object(c, 'select_model', side_effect=lambda url, kind: ('http://server/v1', 'served-' + kind)), \
             patch('builtins.input', side_effect=['', 'https://working.example/v1/chat/completions',
                 'http://secondary.example/v1/chat/completions', '', 'http://secondary.example/v1/embeddings']), \
@@ -320,6 +323,7 @@ with tempfile.TemporaryDirectory() as tmp:
         'embedding_api_url': 'http://embedding.example/v1/chat/embedding',
     }))
     with patch.object(c, 'MEM0_CONFIG', target), \
+            patch.object(c, 'model_choice', return_value='local'), \
             patch.object(c, 'select_model', side_effect=lambda url, kind: ('http://server/v1', 'served-' + kind)), \
             patch('builtins.input', side_effect=[
                 '', 'http://secondary.example/v1/chat/completions',

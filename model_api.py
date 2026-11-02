@@ -1,4 +1,4 @@
-"""Select currently loaded LM Studio models without triggering model loading."""
+"""Resolve local models and adapt native frontier inference APIs."""
 import json
 from http.client import RemoteDisconnected
 import math
@@ -89,3 +89,102 @@ def validate_response(response, kind):
                 raise ValueError('Invalid chat completion result')
     except (KeyError, IndexError, TypeError, AttributeError) as error:
         raise ValueError(f'Invalid {kind} response') from error
+
+
+def inference_connection(data, secondary=False):
+    """Read new provider settings without changing legacy URL-only configurations."""
+    suffix = '_secondary' if secondary else ''
+    return {key: data.get('inference_' + key + suffix, default) for key, default in (
+        ('provider', 'local'), ('api_url', None), ('model', None), ('api_key', None))}
+
+
+def resolve_inference(connection):
+    if connection['provider'] == 'local':
+        return select_model(connection['api_url'], 'llm')
+    if connection['provider'] not in ('openai', 'gemini', 'anthropic'):
+        raise ValueError('Unsupported inference provider')
+    if not connection.get('model') or not connection.get('api_key'):
+        raise ValueError('Frontier model and API key are required')
+    base = api_base_url(connection['api_url'], ('/chat/completions', '/messages'))
+    return base, connection['model']
+
+
+
+def anthropic_schema(schema):
+    """Remove unsupported wire constraints; extraction still validates them locally."""
+    result = dict(schema)
+    for key in ('minLength', 'maxLength', 'maxItems'):
+        result.pop(key, None)
+    if 'properties' in result:
+        result['properties'] = {key: anthropic_schema(value)
+                                for key, value in result['properties'].items()}
+    if 'items' in result:
+        result['items'] = anthropic_schema(result['items'])
+    return result
+
+
+def inference_request(connection, payload):
+    """Build provider-specific, non-streaming text inference without sharing credentials."""
+    base, model = resolve_inference(connection)
+    provider = connection['provider']
+    headers = {'Content-Type': 'application/json'}
+    if provider in ('local', 'openai'):
+        headers['Authorization'] = 'Bearer ' + (connection.get('api_key') or 'local-no-key')
+        url = connection['api_url'] if provider == 'local' else base + '/chat/completions'
+        return url, headers, {**payload, 'model': model}
+    if payload.get('tools') or payload.get('stream'):
+        raise ValueError('Native inference supports non-streaming text and JSON extraction only')
+    messages = payload['messages']
+    system = '\n'.join(m['content'] for m in messages if m['role'] == 'system')
+    conversation = [m for m in messages if m['role'] != 'system']
+    if any(m['role'] not in ('user', 'assistant') or not isinstance(m['content'], str)
+           for m in conversation):
+        raise ValueError('Native inference requires user/assistant text messages')
+    schema = payload.get('response_format', {}).get('json_schema', {}).get('schema')
+    max_tokens = payload.get('max_completion_tokens', payload.get('max_tokens', 4096))
+    if provider == 'gemini':
+        from urllib.parse import quote
+        model_path = quote(model.removeprefix('models/'), safe='')
+        headers['x-goog-api-key'] = connection['api_key']
+        config = {'maxOutputTokens': max_tokens}
+        if schema:
+            config.update(responseMimeType='application/json', responseJsonSchema=schema)
+        elif payload.get('response_format', {}).get('type') == 'json_object':
+            config['responseMimeType'] = 'application/json'
+        body = {'contents': [{'role': 'model' if m['role'] == 'assistant' else 'user',
+                             'parts': [{'text': m['content']}]} for m in conversation],
+                'generationConfig': config}
+        if system:
+            body['systemInstruction'] = {'parts': [{'text': system}]}
+        return base + '/models/' + model_path + ':generateContent', headers, body
+    headers.update({'x-api-key': connection['api_key'], 'anthropic-version': '2023-06-01'})
+    body = {'model': model, 'max_tokens': max_tokens, 'messages': conversation}
+    if system:
+        body['system'] = system
+    if schema:
+        body['output_config'] = {'format': {'type': 'json_schema', 'schema': anthropic_schema(schema)}}
+    return base + '/messages', headers, body
+
+
+def inference_response(provider, response):
+    """Preserve truncation/refusal signals for the existing extraction guards."""
+    if provider in ('local', 'openai'):
+        return response
+    if provider == 'gemini':
+        candidate = response.get('candidates', [{}])[0]
+        parts = candidate.get('content', {}).get('parts', [])
+        content = ''.join(p.get('text', '') for p in parts if not p.get('thought'))
+        reason = {'STOP': 'stop', 'MAX_TOKENS': 'length'}.get(
+            candidate.get('finishReason'), 'content_filter')
+        tokens = response.get('usageMetadata', {}).get('candidatesTokenCount', 0)
+    elif provider == 'anthropic':
+        content = ''.join(p.get('text', '') for p in response.get('content', [])
+                          if p.get('type') == 'text')
+        reason = {'end_turn': 'stop', 'max_tokens': 'length'}.get(
+            response.get('stop_reason'), 'content_filter')
+        tokens = response.get('usage', {}).get('output_tokens', 0)
+    else:
+        raise ValueError('Unsupported inference provider')
+    return {'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': content},
+                         'finish_reason': reason}],
+            'usage': {'completion_tokens': tokens}}

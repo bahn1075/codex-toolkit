@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 
-def test_setup_preserves_existing_home():
+def test_setup_preserves_existing_home(option=None):
     source = Path(__file__).resolve().parent
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -22,9 +22,10 @@ def test_setup_preserves_existing_home():
             'remove_homebrew_codex() { :; }\nnpm() { return 1; }\n'
             'bootstrap() { mkdir -p "$CT_ROOT"; echo "{}" > "$CT_ROOT/install-state.json"; }\n'
             'install_packages() { mkdir -p "$HOME/.local/bin"; echo updated > "$HOME/.local/bin/codex"; }\n'
+            'install_mem0() { echo prompted > "$HOME/model-settings-called"; }\n'
             + ''.join(name + '() { :; }\n' for name in (
-                'configure_core', 'install_mem0', 'configure_headroom', 'install_plugins', 'finish')))
-        result = subprocess.run(['bash', str(root / 'setup.sh')],
+                'configure_core', 'configure_headroom', 'install_plugins', 'finish')))
+        result = subprocess.run(['bash', str(root / 'setup.sh')] + ([option] if option else []),
                                 env={**os.environ, 'HOME': str(home), 'PATH': '/usr/bin:/bin'},
                                 capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
@@ -34,7 +35,9 @@ def test_setup_preserves_existing_home():
         backups = list((home / '.codex-backups').glob('update-*/config.toml'))
         assert len(backups) == 1 and backups[0].read_text() == 'user settings'
         assert (home / '.local/bin/codex').read_text().strip() == 'updated'
+        assert (home / 'model-settings-called').read_text().strip() == 'prompted'
 
 
 if __name__ == '__main__':
     test_setup_preserves_existing_home()
+    test_setup_preserves_existing_home('--resume')

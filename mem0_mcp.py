@@ -8,7 +8,8 @@ import importlib
 from http.client import RemoteDisconnected
 from urllib.error import HTTPError
 from openai import BadRequestError, DefaultHttpxClient
-from model_api import select_model, select_available_model
+from model_api import (select_model, select_available_model, inference_connection,
+                       resolve_inference, inference_request, inference_response)
 
 # Use the HTTP implementation selected by this installed OpenAI SDK (httpx or httpx2).
 httpx = importlib.import_module(DefaultHttpxClient.__mro__[1].__module__.split('.')[0])
@@ -34,25 +35,36 @@ class ModelFailoverTransport(httpx.BaseTransport):
         payload = json.loads(request.read())
         for index, url in enumerate(self.urls):
             try:
-                _, model = select_model(url, self.kind)
-                headers = dict(request.headers)
-                headers.pop('host', None)
-                headers.pop('content-length', None)
-                forwarded = httpx.Request(request.method, url, headers=headers,
-                    content=json.dumps({**payload, 'model': model}).encode(),
-                    extensions=request.extensions)
+                if not url:
+                    raise ValueError('No secondary model configured')
+                if self.kind == 'llm':
+                    connection = url if isinstance(url, dict) else {
+                        'provider': 'local', 'api_url': url}
+                    target, headers, body = inference_request(connection, payload)
+                else:
+                    _, model = select_model(url, self.kind)
+                    target = url
+                    headers = {'Authorization': 'Bearer local-no-key',
+                               'Content-Type': 'application/json'}
+                    body = {**payload, 'model': model}
+                forwarded = httpx.Request(request.method, target, headers=headers,
+                    content=json.dumps(body).encode(), extensions=request.extensions)
                 response = self.transport.handle_request(forwarded)
                 try:
                     # Mem0 uses non-streaming calls. Read here to catch stalled bodies too.
                     response.read()
                 finally:
                     response.close()
+                if (self.kind == 'llm' and response.is_success
+                        and connection['provider'] not in ('local', 'openai')):
+                    normalized = inference_response(connection['provider'], json.loads(response.content))
+                    return httpx.Response(response.status_code, json=normalized)
                 return response
             except HTTPError:
                 raise
             except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError,
                     OSError, RemoteDisconnected):
-                if index == 1:
+                if index == 1 or not self.urls[1]:
                     raise
 
     def close(self):
@@ -62,8 +74,18 @@ class ModelFailoverTransport(httpx.BaseTransport):
 def memory():
     data = json.loads(CONFIG.read_text(encoding="utf-8"))
     try:
-        inference_base_url, inference_model = select_available_model(
-            data["inference_api_url"], data.get("inference_api_url_secondary"), 'llm')
+        primary = inference_connection(data)
+        secondary = inference_connection(data, secondary=True)
+        if not primary['api_url']:
+            raise KeyError('inference_api_url')
+        try:
+            inference_base_url, inference_model = resolve_inference(primary)
+        except HTTPError:
+            raise
+        except (OSError, RemoteDisconnected):
+            if not secondary['api_url']:
+                raise
+            inference_base_url, inference_model = resolve_inference(secondary)
         embedding_base_url, embedding_model = select_available_model(
             data["embedding_api_url"], data.get("embedding_api_url_secondary"), 'embedding')
     except KeyError as error:
@@ -101,14 +123,15 @@ def memory():
     })
     for key, provider, kind in (
             ('inference', 'llm', 'llm'), ('embedding', 'embedding_model', 'embedding')):
-        secondary = data.get(key + '_api_url_secondary')
-        if secondary:
+        secondary_url = data.get(key + '_api_url_secondary')
+        if secondary_url or (kind == 'llm' and primary['provider'] != 'local'):
             model_provider = getattr(store, provider)
             previous = model_provider.client
+            endpoints = (primary, secondary if secondary_url else None) if kind == 'llm' else (
+                data[key + '_api_url'], secondary_url)
             model_provider.client = previous.with_options(
-                http_client=DefaultHttpxClient(transport=ModelFailoverTransport(
-                    data[key + '_api_url'], secondary, kind)),
-                timeout=30, max_retries=0)
+                http_client=DefaultHttpxClient(transport=ModelFailoverTransport(*endpoints, kind)),
+                timeout=300 if kind == 'llm' else 30, max_retries=0)
             previous.close()
     return store
 

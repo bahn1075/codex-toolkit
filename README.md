@@ -134,10 +134,10 @@ bash ~/.codex/toolkit/bundle/setup.sh --resume
 codex-doctor
 ```
 
-기존 `mem0.json`의 값은 `--resume`에서 덮어쓰거나 다시 묻지 않습니다. 다만 이전
-버전에서 생성된 파일처럼 모델 API URL이 없는 경우에는 누락된 URL만 입력받습니다.
-연결 정보 자체를 바꿀 때는 권한 `600`을 유지하며 해당 파일을 먼저 수정한 뒤
-`--resume`을 실행하세요. 완료 후 Codex를 다시 시작해 `/mcp`에서 `mem0`,
+기존 `mem0.json`의 Oracle 연결 정보는 `--resume`에서 유지합니다.
+모델 연결 정보는 다시 확인하며 Enter로 기존 값을 유지할 수 있습니다.
+모델 연결 정보만 바꾸려면 `bash setup.sh --llm`을 실행하세요.
+완료 후 Codex를 다시 시작해 `/mcp`에서 `mem0`,
 `/hooks`에서 세 hook을 확인합니다. 기존 설치에 `Stop`이 없다면 업데이트된 설치 번들에서 아래 명령으로
 요청 완료 시 자동 저장을 추가한 뒤 Codex를 다시 시작하고 새 hook을 검토·신뢰하세요.
 
@@ -178,7 +178,20 @@ VS Code 확장도 제거합니다. 이전 버전은 확장 소유권을 기록�
 
 ## Mem0
 
-설정에는 chat completion과 embedding API URL만 입력합니다. 설정 검사와 실제
+`setup.sh`와 `setup.sh --resume`은 inference primary/secondary 각각에서
+`local` 또는 `frontier`를 먼저 선택받습니다. Frontier는 `gemini`(기본),
+`anthropic`, `openai` 중 공급자를 고르고 모델 ID, API URL, API 키를 입력합니다.
+Gemini와 Anthropic은 공급자 고유 API로 요청하며 JSON schema 출력이 가능한 모델을
+사용해야 합니다. 키는 입력 시 표시하지 않고 `~/.codex/mem0.json`(권한 600)에만 저장합니다.
+기존 공급자·모델·주소·키는 Enter로 유지할 수 있고, local로 전환하면 해당 역할의 키를 제거합니다.
+
+**Gemini 추론 + bge-m3 임베딩** 구성에서는 inference를 frontier/gemini로 선택하고,
+embedding primary/secondary는 기존 bge-m3 서버 URL을 Enter로 유지하세요.
+Gemini 모델 ID는 사용 가능한 모델의 정확한 ID를 입력하고, API URL은 기본값
+`https://generativelanguage.googleapis.com/v1beta`를 사용하면 됩니다.
+임베딩은 로컬 모델과 기존 벡터를 유지하며 원격 임베딩으로 자동 변경하지 않습니다.
+
+Local 추론과 embedding은 API URL을 입력받습니다. 설정 검사와 실제
 호출은 LM Studio의 모델 목록에서 종류별로 현재 로드된 모델을 선택하며,
 모델이 여러 개면 서버 목록의 첫 번째 로드된 인스턴스를 사용합니다.
 다운로드만 된 모델은 자동으로 로드하지 않습니다. Chat 모델을 교체하면 다음
@@ -336,16 +349,16 @@ cp headroom_setup.py ~/.codex/toolkit/bundle/headroom_setup.py
 ~/.codex/toolkit/bin/codex-doctor
 ```
 
-## 모델 API URL만 재설정
+## 모델 API 설정만 재설정
 
-`bash setup.sh --llm`은 기존 toolkit 가상 환경으로 inference primary, inference secondary,
-embedding primary, embedding secondary URL을 순서대로 입력받습니다. 각 URL에서 모델 조회와
-실제 요청을 검증하고, 실패하면 재입력받습니다. 기존값은 Enter로 유지할 수 있습니다.
-네 URL이 모두 검증되면 `~/.codex/mem0.json`의 URL 필드만 저장하며 설치, 로그인,
+`bash setup.sh --llm`은 기존 toolkit 가상 환경으로 inference primary, inference secondary의
+모델 종류와 연결 정보, embedding primary, embedding secondary의 로컬 URL을 순서대로
+입력받습니다. 실제 요청을 검증하고, 실패하면 재입력받습니다. 기존값은 Enter로 유지할 수 있습니다.
+네 연결이 모두 검증되면 `~/.codex/mem0.json`의 모델 연결 필드만 저장하며 설치, 로그인,
 Oracle 및 다른 도구 설정은 변경하지 않습니다. 저장 후 Mem0/Codex를 재시작하세요.
 
 Mem0는 매 요청에서 primary를 먼저 사용하고 연결 실패·응답 시간 초과·응답 중 연결 단절 시
-secondary로 재시도합니다. 각 서버에서 현재 로드된 모델을 사용하며 다음 요청은 다시 primary부터
+secondary로 재시도합니다. Local은 현재 로드된 모델, frontier는 지정한 모델과 해당 역할의 키를 사용하며 다음 요청은 다시 primary부터
 시도합니다. HTTP 오류 응답과 잘못된 모델 출력은 그대로 오류로 처리합니다.
 기존 단일 URL 설정도 primary로 사용할 수 있습니다. 두 embedding 서버는 기존 기억과 호환되는
 동일한 embedding 모델과 1024차원 벡터를 제공해야 합니다.
@@ -365,5 +378,6 @@ python3 check_preflight.py
 ~/.codex/toolkit/venv/bin/python check_mem0_chunks.py
 ~/.codex/toolkit/venv/bin/python check_model_api.py
 ~/.codex/toolkit/venv/bin/python check_llm.py
+~/.codex/toolkit/venv/bin/python check_frontier.py
 ~/.codex/toolkit/venv/bin/python mem0_import/check_import_memories.py
 ```

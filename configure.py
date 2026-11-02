@@ -16,7 +16,8 @@ import urllib.request
 from getpass import getpass
 
 import tomlkit
-from model_api import select_model, validate_response
+from model_api import (select_model, validate_response, inference_connection,
+                       inference_request, inference_response)
 
 HOME = pathlib.Path.home()
 CODEX = HOME / '.codex'
@@ -260,23 +261,90 @@ def mem0_api_url(prompt, example, payload, existing=None, response_kind=None):
         return value
 
 
+
+def model_choice(prompt, choices, default):
+    while True:
+        value = input(f'{prompt} ({"/".join(choices)}) [{default}]: ').strip().lower() or default
+        if value in choices:
+            return value
+        print('표시된 항목 중 하나를 입력해주세요.')
+
+
+def frontier_inference(existing, role):
+    """Validate native inference without putting API keys in subprocess arguments or errors."""
+    defaults = {'gemini': 'https://generativelanguage.googleapis.com/v1beta',
+                'anthropic': 'https://api.anthropic.com/v1/messages',
+                'openai': 'https://api.openai.com/v1/chat/completions'}
+    while True:
+        provider = model_choice(f'Mem0 inference {role} provider', tuple(defaults),
+                                existing.get('provider') if existing.get('provider') in defaults else 'gemini')
+        previous = existing if existing.get('provider') == provider else {}
+        model = input(f'Model ID [{previous.get("model") or ""}]: ').strip() or previous.get('model')
+        url = input(f'API URL [{previous.get("api_url") or defaults[provider]}]: ').strip().rstrip('/')
+        url = url or previous.get('api_url') or defaults[provider]
+        secret = getpass('API key (엔터: 기존 키 유지): ').strip() or previous.get('api_key')
+        connection = {'provider': provider, 'api_url': url, 'model': model, 'api_key': secret}
+        parsed = urlparse(url)
+        if (parsed.username is not None or parsed.password is not None
+                or (parsed.scheme != 'https' and parsed.hostname not in ('127.0.0.1', 'localhost', '::1'))):
+            print('API 키 보호를 위해 HTTPS URL을 입력해주세요. 로컬 테스트 주소만 HTTP를 허용합니다.')
+            continue
+        try:
+            target, headers, body = inference_request(connection, {
+                'messages': [{'role': 'user', 'content': 'Return {"ok": true} as JSON.'}],
+                'max_tokens': 4096,
+                'response_format': {'type': 'json_schema', 'json_schema': {
+                    'name': 'connection_test', 'schema': {
+                        'type': 'object', 'properties': {'ok': {'type': 'boolean'}},
+                        'required': ['ok'], 'additionalProperties': False}}}})
+            request = urllib.request.Request(target, headers=headers, data=json.dumps(body).encode())
+            # Reject redirects: never forward a provider API key to another host.
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, headers, newurl):
+                    return None
+            with urllib.request.build_opener(NoRedirect).open(request, timeout=60) as response:
+                result = inference_response(provider, json.load(response))
+            validate_response(result, 'llm')
+            if result['choices'][0].get('finish_reason') != 'stop':
+                raise ValueError('Incomplete inference response')
+        except (OSError, ValueError, TypeError, KeyError, IndexError):
+            print('API 검증 실패: 공급자·모델·URL·키와 JSON 출력 지원 여부를 확인하고 다시 입력해주세요.')
+            continue
+        print('프론티어 API 검증이 완료되었습니다.')
+        return connection
+
+
 def mem0_model_settings(data):
-    """Validate all four URLs before the caller atomically saves settings."""
-    for kind, endpoint, payload in (
-            ('inference', 'chat/completions',
-             {'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 64}),
-            ('embedding', 'embeddings', {'input': 'ping'})):
-        for role in ('primary', 'secondary'):
-            key = kind + '_api_url' + ('_secondary' if role == 'secondary' else '')
+    """Validate all model connections before the caller atomically saves settings."""
+    for role in ('primary', 'secondary'):
+        suffix = '_secondary' if role == 'secondary' else ''
+        existing = inference_connection(data, secondary=role == 'secondary')
+        default = 'local' if existing['provider'] == 'local' else 'frontier'
+        source = model_choice(f'Mem0 inference {role} 모델 종류', ('local', 'frontier'), default)
+        if source == 'frontier':
+            connection = frontier_inference(existing, role)
+            for key, value in connection.items():
+                data['inference_' + key + suffix] = value
+        else:
+            key = 'inference_api_url' + suffix
             data[key] = mem0_api_url(
-                f'Mem0 {kind} {role} API URL', f'http://HOST:1234/v1/{endpoint}',
-                payload, data.get(key),
-                response_kind='embedding' if kind == 'embedding' else None)
+                f'Mem0 inference {role} API URL', 'http://HOST:1234/v1/chat/completions',
+                {'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 64},
+                existing['api_url'] if existing['provider'] == 'local' else None)
+            # Missing provider means local, preserving the legacy settings format.
+            for field in ('provider', 'model', 'api_key'):
+                data.pop('inference_' + field + suffix, None)
+    print('Embedding은 기존 로컬 모델(bge-m3)과 1024차원을 유지합니다.')
+    for role in ('primary', 'secondary'):
+        key = 'embedding_api_url' + ('_secondary' if role == 'secondary' else '')
+        data[key] = mem0_api_url(
+            f'Mem0 embedding {role} API URL', 'http://HOST:1234/v1/embeddings',
+            {'input': 'ping'}, data.get(key), response_kind='embedding')
     return data
 
 
 def llm_settings():
-    """Update only model URLs in an existing Mem0 configuration."""
+    """Update only model connection settings in an existing Mem0 configuration."""
     if not MEM0_CONFIG.is_file():
         raise RuntimeError('No Mem0 configuration found. Run setup.sh first.')
     data = mem0_model_settings(json.loads(MEM0_CONFIG.read_text()))
