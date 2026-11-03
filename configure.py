@@ -271,7 +271,8 @@ def model_choice(prompt, choices, default):
 
 
 def frontier_inference(existing, role):
-    """Validate native inference without putting API keys in subprocess arguments or errors."""
+    """Validate inference with redacted diagnostics and session-local retry defaults."""
+    existing = dict(existing)
     defaults = {'gemini': 'https://generativelanguage.googleapis.com/v1beta',
                 'anthropic': 'https://api.anthropic.com/v1/messages',
                 'openai': 'https://api.openai.com/v1/chat/completions'}
@@ -282,8 +283,11 @@ def frontier_inference(existing, role):
         model = input(f'Model ID [{previous.get("model") or ""}]: ').strip() or previous.get('model')
         url = input(f'API URL [{previous.get("api_url") or defaults[provider]}]: ').strip().rstrip('/')
         url = url or previous.get('api_url') or defaults[provider]
-        secret = getpass('API key (엔터: 기존 키 유지): ').strip() or previous.get('api_key')
+        key_hint = '엔터: 직전 입력/기존 키 유지' if previous.get('api_key') else '필수'
+        secret = input(f'API key (화면에 표시됩니다; {key_hint}): ').strip() or previous.get('api_key')
         connection = {'provider': provider, 'api_url': url, 'model': model, 'api_key': secret}
+        # Keep failed attempts in memory only; the caller saves after all validations pass.
+        existing = connection
         parsed = urlparse(url)
         if (parsed.username is not None or parsed.password is not None
                 or (parsed.scheme != 'https' and parsed.hostname not in ('127.0.0.1', 'localhost', '::1'))):
@@ -297,20 +301,55 @@ def frontier_inference(existing, role):
                     'name': 'connection_test', 'schema': {
                         'type': 'object', 'properties': {'ok': {'type': 'boolean'}},
                         'required': ['ok'], 'additionalProperties': False}}}})
-            request = urllib.request.Request(target, headers=headers, data=json.dumps(body).encode())
+            metadata_only = provider == 'gemini'
+            if metadata_only:
+                target = target.removesuffix(':generateContent')
+            request = urllib.request.Request(target, headers=headers,
+                data=None if metadata_only else json.dumps(body).encode())
             # Reject redirects: never forward a provider API key to another host.
             class NoRedirect(urllib.request.HTTPRedirectHandler):
                 def redirect_request(self, req, fp, code, msg, headers, newurl):
                     return None
-            with urllib.request.build_opener(NoRedirect).open(request, timeout=60) as response:
-                result = inference_response(provider, json.load(response))
-            validate_response(result, 'llm')
-            if result['choices'][0].get('finish_reason') != 'stop':
-                raise ValueError('Incomplete inference response')
-        except (OSError, ValueError, TypeError, KeyError, IndexError):
-            print('API 검증 실패: 공급자·모델·URL·키와 JSON 출력 지원 여부를 확인하고 다시 입력해주세요.')
+            timeout = 10 if metadata_only else 300
+            action = 'API 키·모델 정보 조회' if metadata_only else 'API 응답 생성 검증'
+            print(f'{action} 중입니다. 응답을 최대 {timeout}초 기다립니다...', flush=True)
+            with urllib.request.build_opener(NoRedirect).open(request, timeout=timeout) as response:
+                result = json.load(response)
+            if metadata_only:
+                if (not isinstance(result, dict) or not isinstance(result.get('name'), str)
+                        or not result['name'].startswith('models/')
+                        or 'generateContent' not in result.get('supportedGenerationMethods', [])):
+                    raise ValueError('The selected model does not report generateContent support')
+            else:
+                result = inference_response(provider, result)
+                validate_response(result, 'llm')
+                if result['choices'][0].get('finish_reason') != 'stop':
+                    raise ValueError('Incomplete inference response')
+        except (OSError, ValueError, TypeError, KeyError, IndexError) as error:
+            detail = f'{type(error).__name__}: {error}'
+            if isinstance(error, urllib.error.HTTPError):
+                detail = f'HTTP {error.code}: {error.reason}'
+                try:
+                    failure = json.loads(error.read(16384)).get('error', {})
+                    if isinstance(failure, dict):
+                        status = failure.get('status') or failure.get('type') or failure.get('code') or ''
+                        message = failure.get('message') or error.reason
+                        detail = f'HTTP {error.code} {status}: {message}'
+                except (OSError, ValueError, AttributeError):
+                    pass
+            if secret:
+                detail = detail.replace(secret, '[REDACTED]')
+            detail = re.sub(r'AIza[0-9A-Za-z_-]+', '[REDACTED]', detail)
+            detail = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', detail)[:800]
+            print(f'API 검증 실패: {detail}')
+            if isinstance(error, TimeoutError) or isinstance(getattr(error, 'reason', None), TimeoutError):
+                print('서버 응답 또는 네트워크 지연으로 검증을 마치지 못했습니다. 키의 유효성은 아직 확인되지 않았습니다.')
+            else:
+                print('공급자·모델·URL·키를 확인해주세요.')
+            print('엔터로 직전 입력값을 유지하여 다시 검증할 수 있습니다.')
             continue
-        print('프론티어 API 검증이 완료되었습니다.')
+        print('Gemini 키 인증 및 모델 정보 조회가 완료되었습니다.' if provider == 'gemini'
+              else '프론티어 API 검증이 완료되었습니다.')
         return connection
 
 

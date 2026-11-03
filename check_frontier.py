@@ -21,9 +21,25 @@ hits = []
 down = False
 status = 200
 finish = 'STOP'
+fail_once = False
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        global fail_once
+        if self.path.startswith('/gemini/v1beta/models/'):
+            hits.append((self.path, dict(self.headers), None))
+            self.send_response(403 if fail_once else status)
+            self.end_headers()
+            if fail_once:
+                fail_once = False
+                response = {'error': {'status': 'PERMISSION_DENIED',
+                    'message': 'Key ' + self.headers['x-goog-api-key'] +
+                        ' is restricted; check API permissions'}}
+            else:
+                response = {'name': 'models/' + self.path.rsplit('/', 1)[1],
+                            'supportedGenerationMethods': ['generateContent']}
+            self.wfile.write(json.dumps(response).encode())
+            return
         if self.path.startswith('/local-down'):
             self.connection.close()
             return
@@ -34,8 +50,17 @@ class Handler(BaseHTTPRequestHandler):
             'loaded_instances': [{'id': 'bge-m3'}]}]}).encode())
 
     def do_POST(self):
+        global fail_once
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         hits.append((self.path, dict(self.headers), body))
+        if fail_once:
+            fail_once = False
+            self.send_response(403)
+            self.end_headers()
+            self.wfile.write(json.dumps({'error': {'status': 'PERMISSION_DENIED',
+                'message': 'Key ' + self.headers['x-goog-api-key'] +
+                    ' is restricted; check API permissions'}}).encode())
+            return
         if down and self.path.startswith('/gemini'):
             self.connection.close()
             return
@@ -74,6 +99,43 @@ anthropic = {'provider': 'anthropic', 'api_url': base + '/anthropic/v1/messages'
 schema = {'type': 'object', 'properties': {'memory': {'type': 'array', 'items': {'type': 'string'}}},
           'required': ['memory'], 'additionalProperties': False}
 try:
+    # A failed first attempt must explain the server error and retain unsaved inputs.
+    auth_key = 'AQ.' + 'new-authorization-key-' * 16
+    fail_once = True
+    with patch('builtins.input', side_effect=[
+            'gemini', 'gemini-3.8-flash', base + '/gemini/v1beta', auth_key, '', '', '', '']), \
+            patch.object(configure, 'getpass', side_effect=AssertionError('API key must use visible input')), \
+            contextlib.redirect_stdout(io.StringIO()) as output:
+        try:
+            retried = configure.frontier_inference({}, 'primary')
+        except (StopIteration, EOFError):
+            raise AssertionError('Retry discarded the just-entered model, URL or API key') from None
+    assert retried['model'] == 'gemini-3.8-flash'
+    assert retried['api_key'] == auth_key
+    assert {key.lower(): value for key, value in hits[-1][1].items()}['x-goog-api-key'] == auth_key
+    assert 'HTTP 403' in output.getvalue()
+    assert 'PERMISSION_DENIED' in output.getvalue()
+    assert 'check API permissions' in output.getvalue()
+    assert auth_key not in output.getvalue()
+    assert hits[-1][0] == '/gemini/v1beta/models/gemini-3.8-flash'
+    assert hits[-1][2] is None, 'Key validation must not generate an answer'
+
+    # A read timeout retains visible inputs without treating the key as invalid.
+    real_open = configure.urllib.request.OpenerDirector.open
+    waits = []
+    def delayed_open(opener, request, *, timeout):
+        waits.append(timeout)
+        if len(waits) == 1:
+            raise TimeoutError('The read operation timed out')
+        return real_open(opener, request, timeout=timeout)
+    with patch.object(configure.urllib.request.OpenerDirector, 'open', new=delayed_open), \
+            patch('builtins.input', side_effect=[
+                'gemini', 'gemini-3.8-flash', base + '/gemini/v1beta', auth_key, '', '', '', '']), \
+            contextlib.redirect_stdout(io.StringIO()) as output:
+        assert configure.frontier_inference({}, 'primary')['api_key'] == auth_key
+    assert waits == [10, 10]
+    assert '키의 유효성은 아직 확인되지 않았습니다' in output.getvalue()
+    assert auth_key not in output.getvalue()
     # Native Anthropic schemas cannot carry our locally enforced length constraints.
     constrained = {**schema, 'properties': {'memory': {'type': 'array', 'minItems': 1,
         'maxItems': 1, 'items': {'type': 'string', 'minLength': 1, 'maxLength': 1000}}}}
@@ -150,12 +212,12 @@ try:
                     'embedding_api_url': base + '/bge/v1/embeddings',
                     'embedding_api_url_secondary': base + '/bge/v1/embeddings'}
         target.write_text(json.dumps(original))
-        answers = ['frontier', 'gemini', 'gemini-test', base + '/gemini/v1beta',
-                   'frontier', 'anthropic', 'claude-test', base + '/anthropic/v1/messages',
+        answers = ['frontier', 'gemini', 'gemini-test', base + '/gemini/v1beta', 'gemini-secret',
+                   'frontier', 'anthropic', 'claude-test', base + '/anthropic/v1/messages', 'anthropic-secret',
                    '', '']
         with patch.object(configure, 'MEM0_CONFIG', target), \
                 patch('builtins.input', side_effect=answers), \
-                patch.object(configure, 'getpass', side_effect=['gemini-secret', 'anthropic-secret']), \
+                patch.object(configure, 'getpass', side_effect=AssertionError('API key must use visible input')), \
                 patch.object(configure, 'mem0_api_url', side_effect=lambda p, e, pl, existing, **kw: existing), \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             configure.mem0_settings()
@@ -221,8 +283,7 @@ try:
         before = target.read_bytes()
         status = 401
         with patch.object(configure, 'MEM0_CONFIG', target), \
-                patch('builtins.input', side_effect=['', '', '', '', EOFError('cancel')]), \
-                patch.object(configure, 'getpass', return_value=''), \
+                patch('builtins.input', side_effect=['', '', '', '', '', EOFError('cancel')]), \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             try:
                 configure.llm_settings()

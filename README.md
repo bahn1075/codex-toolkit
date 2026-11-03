@@ -182,8 +182,13 @@ VS Code 확장도 제거합니다. 이전 버전은 확장 소유권을 기록�
 `local` 또는 `frontier`를 먼저 선택받습니다. Frontier는 `gemini`(기본),
 `anthropic`, `openai` 중 공급자를 고르고 모델 ID, API URL, API 키를 입력합니다.
 Gemini와 Anthropic은 공급자 고유 API로 요청하며 JSON schema 출력이 가능한 모델을
-사용해야 합니다. 키는 입력 시 표시하지 않고 `~/.codex/mem0.json`(권한 600)에만 저장합니다.
+사용해야 합니다. API 키는 붙여넣기 확인을 위해 입력 중 터미널에 표시하며,
+`~/.codex/mem0.json`(권한 600)에 저장합니다. 오류 메시지에서는 키를 가립니다.
+Gemini 설정 검증은 답변을 생성하지 않고 모델 정보 조회로 키 인증과 모델 조회 가능 여부를
+확인하며 최대 10초 대기합니다. 실제 답변 생성과 JSON 출력 처리는 Mem0 사용 시 수행합니다.
 기존 공급자·모델·주소·키는 Enter로 유지할 수 있고, local로 전환하면 해당 역할의 키를 제거합니다.
+검증 실패 시 HTTP 상태와 키를 가린 서버 오류를 표시하며, 재입력에서도 직전에 입력한
+모델·주소·키를 Enter로 유지합니다. 실패한 입력은 검증이 끝나기 전까지 파일에 저장하지 않습니다.
 
 **Gemini 추론 + bge-m3 임베딩** 구성에서는 inference를 frontier/gemini로 선택하고,
 embedding primary/secondary는 기존 bge-m3 서버 URL을 Enter로 유지하세요.
