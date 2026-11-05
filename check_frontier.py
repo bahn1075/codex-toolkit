@@ -20,6 +20,7 @@ from mem0.configs.embeddings.base import BaseEmbedderConfig
 hits = []
 down = False
 status = 200
+primary_status = 200
 finish = 'STOP'
 fail_once = False
 
@@ -64,7 +65,7 @@ class Handler(BaseHTTPRequestHandler):
         if down and self.path.startswith('/gemini'):
             self.connection.close()
             return
-        self.send_response(status)
+        self.send_response(primary_status if self.path.startswith('/gemini') and primary_status != 200 else status)
         self.end_headers()
         if self.path.startswith('/bge'):
             assert body['model'] == 'bge-m3'
@@ -177,15 +178,35 @@ try:
         assert body['output_config']['format']['schema'] == schema
         assert body['system'] == 'Extract facts'
         down = False
-        status = 401
+        for code in (429, 500, 502, 503, 504):
+            primary_status = code
+            before = len(hits)
+            assert complete().choices[0].finish_reason == 'stop'
+            assert len(hits) == before + 2
+            assert hits[-2][0].startswith('/gemini') and hits[-1][0].startswith('/anthropic')
+            primary_status = 200
+            assert complete().choices[0].finish_reason == 'stop'
+            assert hits[-1][0].startswith('/gemini')
+        # Secondary errors propagate after exactly two HTTP calls.
+        primary_status, status = 503, 502
         before = len(hits)
         try:
             complete()
         except APIStatusError as error:
-            assert error.status_code == 401
+            assert error.status_code == 502
         else:
-            raise AssertionError('HTTP authentication errors must not trigger failover')
-        assert len(hits) == before + 1
+            raise AssertionError('Secondary error must propagate')
+        assert len(hits) == before + 2
+        primary_status, status = 200, 200
+        for status in (400, 401, 403, 404):
+            before = len(hits)
+            try:
+                complete()
+            except APIStatusError as error:
+                assert error.status_code == status
+            else:
+                raise AssertionError('Input/authentication errors must not trigger failover')
+            assert len(hits) == before + 1
         status = 200
 
     openai_connection = {'provider': 'openai', 'api_url': base + '/openai/v1/chat/completions',
@@ -196,6 +217,31 @@ try:
         assert client.chat.completions.create(model='placeholder', messages=[
             {'role': 'user', 'content': 'hello'}]).choices[0].finish_reason == 'stop'
         assert hits[-1][2]['model'] == 'openai-test'
+        status = 503
+        before = len(hits)
+        try:
+            client.chat.completions.create(model='placeholder', messages=[{'role':'user','content':'hello'}])
+        except APIStatusError as error:
+            assert error.status_code == 503
+        else:
+            raise AssertionError('Without secondary, primary error must propagate')
+        assert len(hits) == before + 1
+        status = 200
+
+    # HTTP status failover applies only to inference, even with a secondary embedding URL.
+    with OpenAI(api_key='unused',base_url=base,max_retries=0,
+                http_client=DefaultHttpxClient(transport=mem0_mcp.ModelFailoverTransport(
+                    base+'/bge/v1/embeddings',base+'/bge/v1/embeddings','embedding'))) as client:
+        status = 503
+        before = len(hits)
+        try:
+            client.embeddings.create(model='placeholder',input='ping')
+        except APIStatusError as error:
+            assert error.status_code == 503
+        else:
+            raise AssertionError('Embedding HTTP errors must propagate')
+        assert len(hits) == before + 1
+        status = 200
 
     with OpenAI(api_key='unused', base_url=base + '/unused', max_retries=0,
                 http_client=DefaultHttpxClient(transport=mem0_mcp.ModelFailoverTransport(
@@ -214,7 +260,7 @@ try:
         target.write_text(json.dumps(original))
         answers = ['frontier', 'gemini', 'gemini-test', base + '/gemini/v1beta', 'gemini-secret',
                    'frontier', 'anthropic', 'claude-test', base + '/anthropic/v1/messages', 'anthropic-secret',
-                   '', '']
+                   'local', 'local']
         with patch.object(configure, 'MEM0_CONFIG', target), \
                 patch('builtins.input', side_effect=answers), \
                 patch.object(configure, 'getpass', side_effect=AssertionError('API key must use visible input')), \

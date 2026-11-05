@@ -179,7 +179,7 @@ VS Code 확장도 제거합니다. 이전 버전은 확장 소유권을 기록�
 ## Mem0
 
 `setup.sh`와 `setup.sh --resume`은 inference primary/secondary 각각에서
-`local` 또는 `frontier`를 먼저 선택받습니다. Frontier는 `gemini`(기본),
+`local` 또는 `frontier`를 먼저 선택받으며, Enter의 기본값은 항상 `frontier`입니다. Frontier는 `gemini`(기본),
 `anthropic`, `openai` 중 공급자를 고르고 모델 ID, API URL, API 키를 입력합니다.
 Gemini와 Anthropic은 공급자 고유 API로 요청하며 JSON schema 출력이 가능한 모델을
 사용해야 합니다. API 키는 붙여넣기 확인을 위해 입력 중 터미널에 표시하며,
@@ -191,10 +191,18 @@ Gemini 설정 검증은 답변을 생성하지 않고 모델 정보 조회로 �
 모델·주소·키를 Enter로 유지합니다. 실패한 입력은 검증이 끝나기 전까지 파일에 저장하지 않습니다.
 
 **Gemini 추론 + bge-m3 임베딩** 구성에서는 inference를 frontier/gemini로 선택하고,
-embedding primary/secondary는 기존 bge-m3 서버 URL을 Enter로 유지하세요.
+embedding primary/secondary에서 `local`을 선택한 뒤 기존 bge-m3 서버 URL을 Enter로 유지하세요.
 Gemini 모델 ID는 사용 가능한 모델의 정확한 ID를 입력하고, API URL은 기본값
 `https://generativelanguage.googleapis.com/v1beta`를 사용하면 됩니다.
-임베딩은 로컬 모델과 기존 벡터를 유지하며 원격 임베딩으로 자동 변경하지 않습니다.
+임베딩도 primary/secondary 각각 `local/frontier`를 선택하며 Enter 기본값은 `frontier`입니다.
+Frontier 공급자는 `cloudflare`이며 Cloudflare Account ID와 Workers AI 실행 권한이 있는
+API 토큰을 입력합니다. 모델은 `@cf/baai/bge-m3`로 고정하고 URL은 자동 구성합니다.
+설정 시 `ping`을 임베딩하여 인증과 1024차원을 최대 10초 동안 검증합니다.
+토큰은 입력 중 화면에 표시하며 `~/.codex/mem0.json`(권한 600)에 저장합니다.
+Cloudflare 재설정 시 Account ID·토큰은 Enter로 유지하며, `local`로 바꾸면 해당 역할의 토큰을 제거합니다.
+기존 URL만 저장된 설정은 계속 로컬로 처리하며, 설정을 다시 실행해 선택하기 전에는 변경하지 않습니다.
+로컬과 Cloudflare BGE-M3의 샘플 비교에서는 기존 벡터 검색이 가능했지만, 실행 구현이나
+모델 변경에 따라 근접한 검색 순위는 달라질 수 있습니다.
 
 Local 추론과 embedding은 API URL을 입력받습니다. 설정 검사와 실제
 호출은 LM Studio의 모델 목록에서 종류별로 현재 로드된 모델을 선택하며,
@@ -357,14 +365,18 @@ cp headroom_setup.py ~/.codex/toolkit/bundle/headroom_setup.py
 ## 모델 API 설정만 재설정
 
 `bash setup.sh --llm`은 기존 toolkit 가상 환경으로 inference primary, inference secondary의
-모델 종류와 연결 정보, embedding primary, embedding secondary의 로컬 URL을 순서대로
-입력받습니다. 실제 요청을 검증하고, 실패하면 재입력받습니다. 기존값은 Enter로 유지할 수 있습니다.
+모델 종류와 연결 정보, embedding primary, embedding secondary의 모델 종류와 연결 정보를 순서대로
+입력받습니다. 두 종류 모두 유형 선택의 Enter 기본값은 `frontier`이며, 나머지 기존 연결 정보는 Enter로 유지합니다.
+실제 요청을 검증하고, 실패하면 재입력받습니다.
 네 연결이 모두 검증되면 `~/.codex/mem0.json`의 모델 연결 필드만 저장하며 설치, 로그인,
 Oracle 및 다른 도구 설정은 변경하지 않습니다. 저장 후 Mem0/Codex를 재시작하세요.
 
 Mem0는 매 요청에서 primary를 먼저 사용하고 연결 실패·응답 시간 초과·응답 중 연결 단절 시
 secondary로 재시도합니다. Local은 현재 로드된 모델, frontier는 지정한 모델과 해당 역할의 키를 사용하며 다음 요청은 다시 primary부터
-시도합니다. HTTP 오류 응답과 잘못된 모델 출력은 그대로 오류로 처리합니다.
+시도합니다. 추론 API가 HTTP 429·500·502·503·504를 반환하면 primary를 다시 호출하거나
+Retry-After만큼 기다리지 않고 해당 요청을 secondary로 한 번 재시도합니다.
+Secondary도 실패하면 그 오류를 반환합니다. HTTP 400·401·403·404 등 다른 상태와 잘못된 모델 출력은
+그대로 오류로 처리합니다. 임베딩의 HTTP 오류는 자동 전환하지 않습니다.
 기존 단일 URL 설정도 primary로 사용할 수 있습니다. 두 embedding 서버는 기존 기억과 호환되는
 동일한 embedding 모델과 1024차원 벡터를 제공해야 합니다.
 
@@ -384,5 +396,6 @@ python3 check_preflight.py
 ~/.codex/toolkit/venv/bin/python check_model_api.py
 ~/.codex/toolkit/venv/bin/python check_llm.py
 ~/.codex/toolkit/venv/bin/python check_frontier.py
+~/.codex/toolkit/venv/bin/python check_cloudflare.py
 ~/.codex/toolkit/venv/bin/python mem0_import/check_import_memories.py
 ```

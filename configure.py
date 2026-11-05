@@ -17,7 +17,7 @@ from getpass import getpass
 
 import tomlkit
 from model_api import (select_model, validate_response, inference_connection,
-                       inference_request, inference_response)
+                       inference_request, inference_response, embedding_connection, embedding_request)
 
 HOME = pathlib.Path.home()
 CODEX = HOME / '.codex'
@@ -353,13 +353,46 @@ def frontier_inference(existing, role):
         return connection
 
 
+def frontier_embedding(existing, role):
+    """Validate a real 1024-dimensional BGE-M3 vector before saving credentials."""
+    existing = dict(existing)
+    while True:
+        model_choice(f'Mem0 embedding {role} provider', ('cloudflare',), 'cloudflare')
+        match = re.search(r'/accounts/([0-9a-fA-F]{32})/', existing.get('api_url') or '')
+        previous_account = match.group(1) if match else ''
+        account = input(f'Cloudflare Account ID [{previous_account}]: ').strip() or previous_account
+        secret = input('Cloudflare API token (화면에 표시됩니다; 엔터: 기존 키 유지): ').strip() or existing.get('api_key')
+        if not re.fullmatch(r'[0-9a-fA-F]{32}', account) or not secret:
+            print('32자리 Cloudflare Account ID와 API 토큰을 입력해주세요.')
+            continue
+        connection = {'provider': 'cloudflare', 'model': '@cf/baai/bge-m3', 'api_key': secret,
+                      'api_url': f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1/embeddings'}
+        existing = connection
+        try:
+            target, headers, body = embedding_request(connection, {'input': 'ping'})
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, headers, newurl):
+                    return None
+            request = urllib.request.Request(target, headers=headers, data=json.dumps(body).encode())
+            print('Cloudflare BGE-M3 검증 중입니다. 최대 10초 기다립니다...', flush=True)
+            with urllib.request.build_opener(NoRedirect).open(request, timeout=10) as response:
+                validate_response(json.load(response), 'embedding')
+        except (OSError, ValueError, TypeError) as error:
+            detail = f'{type(error).__name__}: {error}'.replace(secret, '[REDACTED]')
+            detail = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', detail)[:800]
+            print(f'Cloudflare 검증 실패: {detail}')
+            print('Account ID·API 토큰·Workers AI 권한을 확인해주세요. 엔터로 직전 입력값을 유지합니다.')
+            continue
+        print('Cloudflare BGE-M3 인증 및 1024차원 검증이 완료되었습니다.')
+        return connection
+
+
 def mem0_model_settings(data):
     """Validate all model connections before the caller atomically saves settings."""
     for role in ('primary', 'secondary'):
         suffix = '_secondary' if role == 'secondary' else ''
         existing = inference_connection(data, secondary=role == 'secondary')
-        default = 'local' if existing['provider'] == 'local' else 'frontier'
-        source = model_choice(f'Mem0 inference {role} 모델 종류', ('local', 'frontier'), default)
+        source = model_choice(f'Mem0 inference {role} 모델 종류', ('local', 'frontier'), 'frontier')
         if source == 'frontier':
             connection = frontier_inference(existing, role)
             for key, value in connection.items():
@@ -373,12 +406,21 @@ def mem0_model_settings(data):
             # Missing provider means local, preserving the legacy settings format.
             for field in ('provider', 'model', 'api_key'):
                 data.pop('inference_' + field + suffix, None)
-    print('Embedding은 기존 로컬 모델(bge-m3)과 1024차원을 유지합니다.')
+    print('Embedding은 BGE-M3와 1024차원을 유지합니다.')
     for role in ('primary', 'secondary'):
-        key = 'embedding_api_url' + ('_secondary' if role == 'secondary' else '')
-        data[key] = mem0_api_url(
-            f'Mem0 embedding {role} API URL', 'http://HOST:1234/v1/embeddings',
-            {'input': 'ping'}, data.get(key), response_kind='embedding')
+        suffix = '_secondary' if role == 'secondary' else ''
+        existing = embedding_connection(data, secondary=role == 'secondary')
+        source = model_choice(f'Mem0 embedding {role} 모델 종류', ('local', 'frontier'), 'frontier')
+        if source == 'frontier':
+            for key, value in frontier_embedding(existing, role).items():
+                data['embedding_' + key + suffix] = value
+        else:
+            data['embedding_api_url' + suffix] = mem0_api_url(
+                f'Mem0 embedding {role} API URL', 'http://HOST:1234/v1/embeddings',
+                {'input': 'ping'}, existing['api_url'] if existing['provider'] == 'local' else None,
+                response_kind='embedding')
+            for field in ('provider', 'model', 'api_key'):
+                data.pop('embedding_' + field + suffix, None)
     return data
 
 

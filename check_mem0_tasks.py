@@ -5,9 +5,20 @@ import tempfile
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 import uuid
+from datetime import datetime
 
 import mem0_session as session_import
 import mem0_mcp
+
+
+# Exercise Mem0's real insertion path: new rows must expose a timezone-aware updated_at.
+timestamp_store = SimpleNamespace(vector_store=MagicMock(), db=MagicMock())
+timestamp_text = 'Timestamp regression check'
+mem0_mcp.Memory._create_memory(timestamp_store, timestamp_text, {timestamp_text: [0.1] * 1024})
+timestamp_payload = timestamp_store.vector_store.insert.call_args.kwargs['payloads'][0]
+assert timestamp_payload['updated_at'] == timestamp_payload['created_at']
+assert datetime.fromisoformat(timestamp_payload['updated_at']).tzinfo is not None
+assert timestamp_store.db.add_history.call_args.kwargs['updated_at'] == timestamp_payload['updated_at']
 
 
 class Store:

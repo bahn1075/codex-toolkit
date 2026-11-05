@@ -91,6 +91,33 @@ def validate_response(response, kind):
         raise ValueError(f'Invalid {kind} response') from error
 
 
+def embedding_connection(data, secondary=False):
+    """Legacy URL-only embedding settings remain local."""
+    suffix = '_secondary' if secondary else ''
+    return {key: data.get('embedding_' + key + suffix, default) for key, default in (
+        ('provider', 'local'), ('api_url', None), ('model', None), ('api_key', None))}
+
+
+def resolve_embedding(connection):
+    if connection['provider'] == 'local':
+        return select_model(connection['api_url'], 'embedding')
+    if connection['provider'] != 'cloudflare':
+        raise ValueError('Unsupported embedding provider')
+    if connection.get('model') != '@cf/baai/bge-m3' or not connection.get('api_key'):
+        raise ValueError('Cloudflare BGE-M3 model and API token are required')
+    parsed = urlparse(connection['api_url'])
+    if (parsed.username is not None or parsed.password is not None or
+            (parsed.scheme != 'https' and parsed.hostname not in ('localhost', '127.0.0.1', '::1'))):
+        raise ValueError('Cloudflare requires HTTPS')
+    return api_base_url(connection['api_url'], ('/embeddings',)), connection['model']
+
+
+def embedding_request(connection, payload):
+    _, model = resolve_embedding(connection)
+    return (connection['api_url'], {'Authorization': 'Bearer ' + (connection.get('api_key') or 'local-no-key'),
+            'Content-Type': 'application/json'}, {**payload, 'model': model, 'encoding_format': 'float'})
+
+
 def inference_connection(data, secondary=False):
     """Read new provider settings without changing legacy URL-only configurations."""
     suffix = '_secondary' if secondary else ''

@@ -8,8 +8,9 @@ import importlib
 from http.client import RemoteDisconnected
 from urllib.error import HTTPError
 from openai import BadRequestError, DefaultHttpxClient
-from model_api import (select_model, select_available_model, inference_connection,
-                       resolve_inference, inference_request, inference_response)
+from model_api import (inference_connection,
+                       resolve_inference, inference_request, inference_response,
+                       embedding_connection, resolve_embedding, embedding_request)
 
 # Use the HTTP implementation selected by this installed OpenAI SDK (httpx or httpx2).
 httpx = importlib.import_module(DefaultHttpxClient.__mro__[1].__module__.split('.')[0])
@@ -42,15 +43,15 @@ class ModelFailoverTransport(httpx.BaseTransport):
                         'provider': 'local', 'api_url': url}
                     target, headers, body = inference_request(connection, payload)
                 else:
-                    _, model = select_model(url, self.kind)
-                    target = url
-                    headers = {'Authorization': 'Bearer local-no-key',
-                               'Content-Type': 'application/json'}
-                    body = {**payload, 'model': model}
+                    connection = url if isinstance(url, dict) else {'provider': 'local', 'api_url': url}
+                    target, headers, body = embedding_request(connection, payload)
                 forwarded = httpx.Request(request.method, target, headers=headers,
                     content=json.dumps(body).encode(), extensions=request.extensions)
                 response = self.transport.handle_request(forwarded)
                 try:
+                    if (self.kind == 'llm' and index == 0 and self.urls[1]
+                            and response.status_code in (429, 500, 502, 503, 504)):
+                        continue
                     # Mem0 uses non-streaming calls. Read here to catch stalled bodies too.
                     response.read()
                 finally:
@@ -86,8 +87,18 @@ def memory():
             if not secondary['api_url']:
                 raise
             inference_base_url, inference_model = resolve_inference(secondary)
-        embedding_base_url, embedding_model = select_available_model(
-            data["embedding_api_url"], data.get("embedding_api_url_secondary"), 'embedding')
+        embedding_primary = embedding_connection(data)
+        embedding_secondary = embedding_connection(data, secondary=True)
+        selected_embedding = embedding_primary
+        try:
+            embedding_base_url, embedding_model = resolve_embedding(selected_embedding)
+        except HTTPError:
+            raise
+        except (OSError, RemoteDisconnected):
+            if not embedding_secondary['api_url']:
+                raise
+            selected_embedding = embedding_secondary
+            embedding_base_url, embedding_model = resolve_embedding(selected_embedding)
     except KeyError as error:
         raise RuntimeError(
             'Mem0 model API URLs are missing. Run setup.sh --resume to configure them.') from error
@@ -114,7 +125,7 @@ def memory():
         }},
         "embedder": {"provider": "openai", "config": {
             "model": embedding_model, "openai_base_url": embedding_base_url,
-            "api_key": "local-no-key", "embedding_dims": 1024,
+            "api_key": selected_embedding.get('api_key') or "local-no-key", "embedding_dims": 1024,
         }},
         "vector_store": {"provider": "oracledb", "config": {
             "collection_name": "CODEX_MEMORIES", "embedding_model_dims": 1024,
@@ -124,11 +135,12 @@ def memory():
     for key, provider, kind in (
             ('inference', 'llm', 'llm'), ('embedding', 'embedding_model', 'embedding')):
         secondary_url = data.get(key + '_api_url_secondary')
-        if secondary_url or (kind == 'llm' and primary['provider'] != 'local'):
+        connection = primary if kind == 'llm' else embedding_primary
+        if secondary_url or connection['provider'] != 'local':
             model_provider = getattr(store, provider)
             previous = model_provider.client
             endpoints = (primary, secondary if secondary_url else None) if kind == 'llm' else (
-                data[key + '_api_url'], secondary_url)
+                embedding_primary, embedding_secondary if secondary_url else None)
             model_provider.client = previous.with_options(
                 http_client=DefaultHttpxClient(transport=ModelFailoverTransport(*endpoints, kind)),
                 timeout=300 if kind == 'llm' else 30, max_retries=0)

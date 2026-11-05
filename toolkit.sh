@@ -26,13 +26,13 @@ usage() {
 Usage: bash setup.sh [--resume|--llm]
 Default: preserve ~/.codex, install/update Codex and configure toolkit tools and Superpowers.
 --resume: rerun setup with the same data-preserving behavior.
---llm: validate and save inference providers/keys and local embedding primary/secondary URLs.
+--llm: validate and save inference/embedding providers and primary/secondary connections.
 Close Codex, Codex app and VS Code before running. Do not run with sudo.
 Optional environment settings (first installation):
   CT_HEADROOM_MODE=mcp             Headroom is available only as an MCP tool
   CT_AUTH=chatgpt                 this bundle uses manual ChatGPT login
 Mem0 uses Oracle AI Vector Search and user-specified inference/embedding APIs. Setup prompts
-for the Oracle wallet, database credentials, inference provider/model/API key and local embedding URLs;
+for the Oracle wallet, database credentials, inference providers and local/Cloudflare embeddings;
 secrets stay in ~/.codex/mem0.json (mode 600) and are never written to install-state or logs.
 EOF
 }
@@ -153,7 +153,7 @@ bootstrap() {
   mkdir -p "$CT_ROOT/bin" "$CT_ROOT/repos" "$CT_ROOT/logs" "$CT_ROOT/bundle"
   # Keep the installer/update bundle available after the downloaded copy is removed.
   if [ "$SCRIPT_DIR" != "$CT_ROOT/bundle" ]; then
-    for ct_file in setup.sh update.sh remove.sh remove.py toolkit.sh check_setup.py configure.py headroom_setup.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_headroom.py check_preflight.py check_configure.py check_remove.py check_mem0_session.py check_mem0_tasks.py check_mem0_chunks.py check_model_api.py check_llm.py check_frontier.py; do
+    for ct_file in setup.sh update.sh remove.sh remove.py toolkit.sh check_setup.py configure.py headroom_setup.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_headroom.py check_preflight.py check_configure.py check_remove.py check_mem0_session.py check_mem0_tasks.py check_mem0_chunks.py check_model_api.py check_llm.py check_frontier.py check_cloudflare.py; do
       cp "$SCRIPT_DIR/$ct_file" "$CT_ROOT/bundle/$ct_file"
     done
     mkdir -p "$CT_ROOT/bundle/mem0_import"
@@ -243,7 +243,7 @@ configure_core() {
 }
 install_mem0() {
   CT_STAGE=mem0
-  note 'Configuring Mem0 with Oracle AI Vector Search, inference APIs and local embeddings.'
+  note 'Configuring Mem0 with Oracle AI Vector Search, inference APIs and local/Cloudflare embeddings.'
   "$CT_PY" "$SCRIPT_DIR/configure.py" mem0-settings
   "$CT_PY" "$SCRIPT_DIR/configure.py" mem0-hooks
   "$CT_PY" "$SCRIPT_DIR/configure.py" status mem0_install configured
