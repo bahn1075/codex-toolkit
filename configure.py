@@ -370,18 +370,27 @@ def frontier_embedding(existing, role):
         existing = connection
         try:
             target, headers, body = embedding_request(connection, {'input': 'ping'})
-            class NoRedirect(urllib.request.HTTPRedirectHandler):
-                def redirect_request(self, req, fp, code, msg, headers, newurl):
-                    return None
-            request = urllib.request.Request(target, headers=headers, data=json.dumps(body).encode())
             print('Cloudflare BGE-M3 검증 중입니다. 최대 10초 기다립니다...', flush=True)
-            with urllib.request.build_opener(NoRedirect).open(request, timeout=10) as response:
-                validate_response(json.load(response), 'embedding')
-        except (OSError, ValueError, TypeError) as error:
+            # Use OS-verified TLS like local validation; pass the token via stdin, not argv.
+            result = subprocess.run([
+                'curl', '--disable', '--fail', '--silent', '--show-error', '--max-time', '10',
+                '--proto', '=https', '--request', 'POST', target,
+                '--header', 'Content-Type: application/json', '--data', json.dumps(body),
+                '--config', '-',
+            ], input='header = ' + json.dumps('Authorization: Bearer ' + secret) + '\n',
+                capture_output=True, text=True, timeout=15)
+            if result.returncode:
+                raise ValueError(result.stderr.strip() or 'Cloudflare curl request failed')
+            validate_response(json.loads(result.stdout), 'embedding')
+        except (OSError, ValueError, TypeError, subprocess.TimeoutExpired) as error:
             detail = f'{type(error).__name__}: {error}'.replace(secret, '[REDACTED]')
             detail = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', detail)[:800]
             print(f'Cloudflare 검증 실패: {detail}')
-            print('Account ID·API 토큰·Workers AI 권한을 확인해주세요. 엔터로 직전 입력값을 유지합니다.')
+            if 'certificate' in detail.lower() or 'SSL' in detail:
+                print('TLS 인증서 문제입니다. 사내 CA와 OS 신뢰 저장소를 확인해주세요. 키의 유효성은 아직 확인되지 않았습니다.')
+            else:
+                print('Account ID·API 토큰·Workers AI 권한을 확인해주세요.')
+            print('엔터로 직전 입력값을 유지합니다.')
             continue
         print('Cloudflare BGE-M3 인증 및 1024차원 검증이 완료되었습니다.')
         return connection

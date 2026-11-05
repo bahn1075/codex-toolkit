@@ -6,6 +6,7 @@ import threading
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
@@ -69,15 +70,17 @@ try:
     with patch('builtins.input', return_value=''):
         assert configure.model_choice('type', ('local','frontier'), 'frontier') == 'frontier'
 
-    response = io.BytesIO(json.dumps({'data':[{'embedding':[0.1]*1024}]}).encode())
-    with patch.object(configure.urllib.request.OpenerDirector, 'open', return_value=response) as opened, \
+    response = subprocess.CompletedProcess([],0,json.dumps({'data':[{'embedding':[0.1]*1024}]}),'')
+    with patch.object(configure.subprocess, 'run', return_value=response) as opened, \
             patch('builtins.input', side_effect=['', 'a'*32, 'test-token']), contextlib.redirect_stdout(io.StringIO()):
         selected = configure.frontier_embedding({}, 'primary')
-    req = opened.call_args.args[0]
-    assert req.full_url == 'https://api.cloudflare.com/client/v4/accounts/'+'a'*32+'/ai/v1/embeddings'
-    assert req.get_header('Authorization') == 'Bearer test-token'
+    command = opened.call_args.args[0]
+    assert 'https://api.cloudflare.com/client/v4/accounts/'+'a'*32+'/ai/v1/embeddings' in command
+    assert 'Authorization: Bearer test-token' in opened.call_args.kwargs['input']
+    assert not any('test-token' in arg for arg in command)
+    assert '-k' not in command and '--insecure' not in command
     assert selected['model'] == '@cf/baai/bge-m3'
-    assert opened.call_args.kwargs['timeout'] == 10
+    assert opened.call_args.kwargs['timeout'] == 15 and command[command.index('--max-time')+1]=='10'
 
     # Startup must pass provider credentials to the actual Mem0 embedder, including without a secondary.
     with tempfile.TemporaryDirectory() as tmp:
@@ -99,9 +102,8 @@ try:
         store.embedding_model.client.close()
 
     # Wrong dimensions fail validation; retries retain the unsaved account and secret.
-    responses=[io.BytesIO(json.dumps({'data':[{'embedding':[0.1]*768}]}).encode()),
-               io.BytesIO(json.dumps({'data':[{'embedding':[0.1]*1024}]}).encode())]
-    with patch.object(configure.urllib.request.OpenerDirector,'open',side_effect=responses), \
+    responses=[subprocess.CompletedProcess([],0,json.dumps({'data':[{'embedding':[0.1]*n}]}),'') for n in (768,1024)]
+    with patch.object(configure.subprocess,'run',side_effect=responses), \
             patch('builtins.input',side_effect=['','a'*32,'test-token','','','']), \
             contextlib.redirect_stdout(io.StringIO()) as output:
         assert configure.frontier_embedding({},'secondary')['api_key']=='test-token'

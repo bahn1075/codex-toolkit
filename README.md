@@ -198,6 +198,8 @@ Gemini 모델 ID는 사용 가능한 모델의 정확한 ID를 입력하고, API
 Frontier 공급자는 `cloudflare`이며 Cloudflare Account ID와 Workers AI 실행 권한이 있는
 API 토큰을 입력합니다. 모델은 `@cf/baai/bge-m3`로 고정하고 URL은 자동 구성합니다.
 설정 시 `ping`을 임베딩하여 인증과 1024차원을 최대 10초 동안 검증합니다.
+Cloudflare 설정 검증은 OS의 CA 신뢰 설정을 사용하는 curl로 수행하며 인증서 검증을 유지합니다.
+API 토큰은 curl 명령 인자 대신 표준 입력으로 전달합니다.
 토큰은 입력 중 화면에 표시하며 `~/.codex/mem0.json`(권한 600)에 저장합니다.
 Cloudflare 재설정 시 Account ID·토큰은 Enter로 유지하며, `local`로 바꾸면 해당 역할의 토큰을 제거합니다.
 기존 URL만 저장된 설정은 계속 로컬로 처리하며, 설정을 다시 실행해 선택하기 전에는 변경하지 않습니다.
