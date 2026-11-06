@@ -151,6 +151,17 @@ class HeadroomTests(unittest.TestCase):
         self.assertNotIn('--torch-backend', installs[1])
         self.assertFalse(any('[mcp,code,ml]' in x for x in installs[1]))
 
+    @unittest.skipUnless(h and h.os.environ.get('HEADROOM_VERIFY_PYTHON'),
+                         'Set HEADROOM_VERIFY_PYTHON to run real ONNX/MCP verification')
+    def test_verification_scopes_read_fixture_independently_of_user_roots(self):
+        with tempfile.TemporaryDirectory() as user_root:
+            env = dict(h.os.environ, HEADROOM_MCP_READ_ROOTS=user_root)
+            result = subprocess.run([env['HEADROOM_VERIFY_PYTHON'], h.__file__,
+                                     'verify', 'onnx_cpu', 'cpu'],
+                                    env=env, capture_output=True, text=True, timeout=300)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(h.json.loads(result.stdout)['read_cache_verified'])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -157,33 +157,35 @@ async def verify(backend, torch_backend):
     from mcp.client.stdio import stdio_client
     content = json.dumps([{'id': i, 'status': 'ok', 'service': 'headroom-check',
         'message': 'Synthetic diagnostic event for compression and retrieval'} for i in range(150)])
-    async with stdio_client(StdioServerParameters(command=sys.executable,
-            args=[__file__, 'serve'], env=dict(os.environ))) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            names = {t.name for t in (await session.list_tools()).tools}
-            assert {'headroom_compress', 'headroom_retrieve', 'headroom_stats', 'headroom_read'} <= names
-            compressed = await session.call_tool('headroom_compress', {'content': content})
-            data = json.loads(compressed.content[0].text)
-            assert data['tokens_saved'] > 0, data
-            original = await session.call_tool('headroom_retrieve', {'hash': data['hash']})
-            assert json.loads(original.content[0].text)['original_content'] == content
-            stats = json.loads((await session.call_tool('headroom_stats', {})).content[0].text)
-            assert stats['compressions'] == 1 and stats['retrievals'] == 1
-            with tempfile.TemporaryDirectory(prefix='headroom-read-check-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='headroom-read-check-') as tmp:
+        # Limit the diagnostic server to its fixture without changing user settings.
+        server_env = dict(os.environ, HEADROOM_MCP_READ_ROOTS=tmp)
+        async with stdio_client(StdioServerParameters(command=sys.executable,
+                args=[__file__, 'serve'], env=server_env)) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                names = {t.name for t in (await session.list_tools()).tools}
+                assert {'headroom_compress', 'headroom_retrieve', 'headroom_stats', 'headroom_read'} <= names
+                compressed = await session.call_tool('headroom_compress', {'content': content})
+                data = json.loads(compressed.content[0].text)
+                assert data['tokens_saved'] > 0, data
+                original = await session.call_tool('headroom_retrieve', {'hash': data['hash']})
+                assert json.loads(original.content[0].text)['original_content'] == content
+                stats = json.loads((await session.call_tool('headroom_stats', {})).content[0].text)
+                assert stats['compressions'] == 1 and stats['retrievals'] == 1
                 path = Path(tmp) / 'sample.txt'
                 path.write_text('Original diagnostic content\n')
                 first = await session.call_tool('headroom_read', {'file_path': str(path)})
-                assert 'Original diagnostic content' in first.content[0].text
+                assert 'Original diagnostic content' in first.content[0].text, first.content
                 cached = await session.call_tool('headroom_read', {'file_path': str(path)})
                 assert json.loads(cached.content[0].text)['status'] == 'cached'
                 path.write_text('Updated diagnostic content\n')
                 fresh = await session.call_tool('headroom_read', {'file_path': str(path), 'fresh': True})
-                assert 'Updated diagnostic content' in fresh.content[0].text
-            print(json.dumps({'backend': backend, 'model_backend': actual,
-                'ml_tokens_saved': result.tokens_saved,
-                'tokens_before': data['original_tokens'], 'tokens_after': data['compressed_tokens'],
-                'retrieval_matches': True, 'read_cache_verified': True, 'mcp_tools': sorted(names)}))
+                assert 'Updated diagnostic content' in fresh.content[0].text, fresh.content
+                print(json.dumps({'backend': backend, 'model_backend': actual,
+                    'ml_tokens_saved': result.tokens_saved,
+                    'tokens_before': data['original_tokens'], 'tokens_after': data['compressed_tokens'],
+                    'retrieval_matches': True, 'read_cache_verified': True, 'mcp_tools': sorted(names)}))
 
 
 def main():
