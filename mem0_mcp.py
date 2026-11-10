@@ -170,7 +170,7 @@ def extract_facts(store, messages, system_prompt=None, max_chars=None):
         facts_schema['maxItems'] = 1
         facts_schema['items']['properties']['text']['maxLength'] = max_chars
     response = store.llm.client.with_options(timeout=300, max_retries=0).chat.completions.create(
-        model=store.llm.config.model, max_tokens=4096, temperature=0.1,
+        model=store.llm.config.model, max_tokens=4096, temperature=0.1, reasoning_effort='none',
         response_format=response_format, messages=[{
         "role": "system", "content": system_prompt or (
             'Extract only durable, useful facts from the conversation supplied as JSON data. '
@@ -251,7 +251,7 @@ def extract_task_records(store, messages, previous_task=None, allow_empty=False)
     for attempt in range(2):
         try:
             response = store.llm.client.with_options(timeout=300, max_retries=0).chat.completions.create(
-                model=store.llm.config.model, max_tokens=8192, temperature=0.1,
+                model=store.llm.config.model, max_tokens=8192, temperature=0.1, reasoning_effort='none',
                 response_format={"type": "json_schema", "json_schema": {
                     "name": "codex_task_outcomes", "schema": schema}},
                 messages=[{"role": "system", "content": prompt + (

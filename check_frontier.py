@@ -72,8 +72,11 @@ class Handler(BaseHTTPRequestHandler):
             response = {'data': [{'embedding': [0.1] * 1024, 'index': 0}]}
         elif self.path.startswith('/openai'):
             assert self.headers['Authorization'] == 'Bearer openai-secret'
+            properties = body.get('response_format', {}).get('json_schema', {}).get('schema', {}).get('properties', {})
+            content = {'tasks': [{'problem': '추론 공급자 변경 요청', 'actions': '설정 경로를 수정함',
+                                  'result': '로컬 검사를 통과함'}]} if 'tasks' in properties else {'memory': []}
             response = {'choices': [{'index': 0, 'message': {'role': 'assistant',
-                'content': '{"memory": []}'}, 'finish_reason': 'stop'}]}
+                'content': json.dumps(content)}, 'finish_reason': 'stop'}]}
         elif self.path.startswith('/gemini'):
             properties = body['generationConfig'].get('responseJsonSchema', {}).get('properties', {})
             content = {'tasks': [{'problem': '추론 공급자 변경 요청', 'actions': '설정 경로를 수정함',
@@ -211,6 +214,17 @@ try:
 
     openai_connection = {'provider': 'openai', 'api_url': base + '/openai/v1/chat/completions',
                          'model': 'openai-test', 'api_key': 'openai-secret'}
+    # Both Mem0 extraction paths must disable thinking on the OpenAI-compatible wire.
+    with OpenAI(api_key='openai-secret', base_url=base + '/openai/v1', max_retries=0) as client:
+        store = SimpleNamespace(llm=SimpleNamespace(client=client, config=SimpleNamespace(
+            model='gemma4-test', lmstudio_response_format={
+                'type': 'json_schema', 'json_schema': {'name': 'facts', 'schema': schema}})))
+        assert mem0_mcp.extract_facts(store, []) == []
+        assert hits[-1][2].get('reasoning_effort') == 'none', 'Fact extraction must disable thinking'
+        assert mem0_mcp.extract_task_records(store, []) == [
+            {'text': '추론 공급자 변경 요청\n설정 경로를 수정함\n로컬 검사를 통과함'}]
+        assert hits[-1][2].get('reasoning_effort') == 'none', 'Task extraction must disable thinking'
+
     with OpenAI(api_key='unused', base_url=base + '/unused', max_retries=0,
                 http_client=DefaultHttpxClient(transport=mem0_mcp.ModelFailoverTransport(
                     openai_connection, None, 'llm'))) as client:
@@ -286,6 +300,8 @@ try:
             store = mem0_mcp.memory()
             try:
                 assert mem0_mcp.extract_facts(store, [{'role': 'user', 'content': 'test'}]) == []
+                assert 'reasoning_effort' not in hits[-1][2]
+                assert 'thinkingConfig' not in hits[-1][2]['generationConfig']
                 finish = 'MAX_TOKENS'
                 try:
                     mem0_mcp.extract_facts(store, [])
@@ -303,6 +319,8 @@ try:
                 finish = 'STOP'
                 assert mem0_mcp.extract_task_records(store, [{'role': 'user', 'content': 'test'}]) == [
                     {'text': '추론 공급자 변경 요청\n설정 경로를 수정함\n로컬 검사를 통과함'}]
+                assert 'reasoning_effort' not in hits[-1][2]
+                assert 'thinkingConfig' not in hits[-1][2]['generationConfig']
                 assert len(store.embedding_model.embed('test')) == 1024
                 assert store.embedding_model.config.model == 'bge-m3'
                 assert store.llm.config.model == 'gemini-test'

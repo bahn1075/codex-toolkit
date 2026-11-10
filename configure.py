@@ -196,7 +196,7 @@ def configure():
 
 
 def mem0_api_url(prompt, example, payload, existing=None, response_kind=None):
-    """Validate an API URL using a currently loaded LM Studio model."""
+    """Validate an API URL using a currently loaded local model."""
     print(f'Example: {example}')
     curl = shutil.which('curl')
     if not curl:
@@ -232,6 +232,8 @@ def mem0_api_url(prompt, example, payload, existing=None, response_kind=None):
             kind = 'embedding' if response_kind == 'embedding' else 'llm'
             _, model = select_model(value, kind)
             request_payload = {**payload, 'model': model}
+            if kind == 'llm':
+                request_payload['reasoning_effort'] = 'none'
             print(f'현재 서빙 모델: {model}')
             result = subprocess.run([
                 curl, '--fail', '--silent', '--show-error', '--max-time', '10',

@@ -22,29 +22,46 @@ def api_base_url(api_url, endpoint):
 
 
 def select_model(api_url, kind):
-    """Return the client base and first loaded instance of the requested type."""
+    """Return the client base and first loaded LM Studio or Ollama model of the requested type."""
     suffixes = ('/embeddings', '/embedding') if kind == 'embedding' else (
         '/chat/completions', '/chat/completion', '/inference')
     base = api_base_url(api_url, suffixes)
     root = re.sub(r'/(?:api/)?v[01]$', '', base)
-    for version in ('v1', 'v0'):
-        request = Request(root + '/api/' + version + '/models',
+    for version in ('v1', 'v0', 'ollama'):
+        path = '/api/ps' if version == 'ollama' else '/api/' + version + '/models'
+        request = Request(root + path,
                           headers={'Authorization': 'Bearer local-no-key'})
         try:
             with urlopen(request, timeout=10) as response:
                 listing = json.load(response)
             break
         except HTTPError as error:
-            if version == 'v1' and error.code == 404:
+            if version != 'ollama' and error.code == 404:
                 continue
             raise
     if not isinstance(listing, dict):
-        raise ValueError('Invalid LM Studio model list')
-    models = listing.get('models' if version == 'v1' else 'data')
+        raise ValueError('Invalid local model list')
+    models = listing.get('data' if version == 'v0' else 'models')
     if not isinstance(models, list):
-        raise ValueError('Invalid LM Studio model list')
+        raise ValueError('Invalid local model list')
     for model in models:
-        if not isinstance(model, dict) or model.get('type') not in (
+        if not isinstance(model, dict):
+            continue
+        if version == 'ollama':
+            identifier = model.get('model') or model.get('name')
+            if not isinstance(identifier, str) or not identifier.strip():
+                continue
+            request = Request(root + '/api/show', data=json.dumps({'model': identifier}).encode(),
+                              headers={'Content-Type': 'application/json',
+                                       'Authorization': 'Bearer local-no-key'})
+            with urlopen(request, timeout=10) as response:
+                details = json.load(response)
+            if not isinstance(details, dict) or not isinstance(details.get('capabilities'), list):
+                raise ValueError('Invalid Ollama model capabilities')
+            if ('embedding' if kind == 'embedding' else 'completion') in details['capabilities']:
+                return base, identifier
+            continue
+        if model.get('type') not in (
                 ('embedding', 'embeddings') if kind == 'embedding' else ('llm', 'vlm')):
             continue
         if version == 'v1':
@@ -57,7 +74,7 @@ def select_model(api_url, kind):
         for identifier in identifiers:
             if isinstance(identifier, str) and identifier.strip():
                 return base, identifier
-    raise ValueError(f'No loaded {kind} model found. Load one in LM Studio first.')
+    raise ValueError(f'No loaded {kind} model found. Load one in LM Studio or Ollama first.')
 
 
 def select_available_model(primary, secondary, kind):

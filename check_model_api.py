@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError
 
 assert importlib.util.find_spec('model_api'), 'Missing shared loaded-model selection'
 from model_api import select_model, validate_response
@@ -18,16 +19,22 @@ models = [
 paths = []
 payloads = []
 legacy = False
+ollama = False
+ollama_models = [{'name': 'served-embed'}, {'model': 'ollama-chat'}]
+model_status = 200
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         payloads.append(payload)
-        if self.path.endswith('/embeddings'):
+        if self.path.endswith('/api/show'):
+            response = {'capabilities': ['embedding'] if payload['model'] == 'served-embed'
+                        else ['completion', 'thinking']}
+        elif self.path.endswith('/embeddings'):
             assert payload['model'] == 'served-embed'
             response = {'data': [{'embedding': [0.1] * 1024}]}
         else:
-            assert payload['model'] == 'replacement'
+            assert payload['model'] == ('ollama-chat' if ollama else 'replacement')
             response = {'choices': [{'message': {'content': 'pong'}}]}
         self.send_response(200)
         self.end_headers()
@@ -35,6 +42,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         paths.append(self.path)
+        if model_status != 200:
+            self.send_error(model_status)
+            return
+        if ollama:
+            if not self.path.endswith('/api/ps'):
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(json.dumps({'models': ollama_models}).encode())
+            return
         if legacy and self.path.endswith('/api/v1/models'):
             self.send_error(404)
             return
@@ -93,6 +111,31 @@ try:
     assert select_model(base + '/v1/chat/completions', 'llm')[1] == 'legacy-chat'
     assert select_model(base + '/v1/embeddings', 'embedding')[1] == 'legacy-embed'
     assert all(path.endswith('/models') for path in paths)
+    legacy = False
+    ollama = True
+    assert select_model(chat_url, 'llm') == (base + '/v1', 'ollama-chat')
+    assert select_model(embedding_url, 'embedding') == (base + '/v1', 'served-embed')
+    with patch('builtins.input', side_effect=[chat_url, EOFError('Unexpected validation retry')]):
+        assert configure.mem0_api_url('Ollama', chat_url, {
+            'messages': [{'role': 'user', 'content': 'ping'}], 'max_tokens': 64}) == chat_url
+    assert payloads[-1]['model'] == 'ollama-chat'
+    assert payloads[-1].get('reasoning_effort') == 'none', 'Validation must disable thinking too'
+    ollama_models[:] = [{'name': 'served-embed'}]
+    try:
+        select_model(chat_url, 'llm')
+    except ValueError as error:
+        assert 'loaded' in str(error)
+    else:
+        raise AssertionError('An embedding model must not serve chat requests')
+    model_status = 401
+    before = len(paths)
+    try:
+        select_model(chat_url, 'llm')
+    except HTTPError as error:
+        assert error.code == 401
+    else:
+        raise AssertionError('Authentication errors must not trigger another model-list API')
+    assert len(paths) == before + 1
 finally:
     server.shutdown()
     server.server_close()

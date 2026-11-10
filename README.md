@@ -382,6 +382,11 @@ Secondary도 실패하면 그 오류를 반환합니다. HTTP 400·401·403·404
 기존 단일 URL 설정도 primary로 사용할 수 있습니다. 두 embedding 서버는 기존 기억과 호환되는
 동일한 embedding 모델과 1024차원 벡터를 제공해야 합니다.
 
+Local은 LM Studio와 Ollama의 로드된 모델을 자동으로 구분합니다. Ollama 추론 URL은
+`http://127.0.0.1:11434/v1/chat/completions`입니다. 먼저 모델을 로드하세요
+(`ollama run gemma4:12b-mlx "" --keepalive=-1 --think=false`). 추론 URL 검증과 Mem0 추출 요청은
+OpenAI 호환 API에 `reasoning_effort: "none"`을 보내 Thinking을 비활성화합니다.
+
 ## 개발 검증
 
 설치된 toolkit 가상 환경으로 네트워크 없는 자체 검사를 실행할 수 있습니다.
