@@ -380,7 +380,7 @@ try:
         assert len(hits) == before + 1
         status = 200
 
-    # HTTP status failover applies only to inference, even with a secondary embedding URL.
+    # If both embedding endpoints fail, propagate the secondary error after one fallback.
     with OpenAI(api_key='unused',base_url=base,max_retries=0,
                 http_client=DefaultHttpxClient(transport=mem0_mcp.ModelFailoverTransport(
                     base+'/bge/v1/embeddings',base+'/bge/v1/embeddings','embedding'))) as client:
@@ -392,7 +392,7 @@ try:
             assert error.status_code == 503
         else:
             raise AssertionError('Embedding HTTP errors must propagate')
-        assert len(hits) == before + 1
+        assert len(hits) == before + 2
         status = 200
 
     with OpenAI(api_key='unused', base_url=base + '/unused', max_retries=0,

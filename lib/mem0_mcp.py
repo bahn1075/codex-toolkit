@@ -49,7 +49,7 @@ class ModelFailoverTransport(httpx.BaseTransport):
                     content=json.dumps(body).encode(), extensions=request.extensions)
                 response = self.transport.handle_request(forwarded)
                 try:
-                    if (self.kind == 'llm' and index == 0 and self.urls[1]
+                    if (index == 0 and self.urls[1]
                             and response.status_code in (429, 500, 502, 503, 504)):
                         continue
                     # Mem0 uses non-streaming calls. Read here to catch stalled bodies too.

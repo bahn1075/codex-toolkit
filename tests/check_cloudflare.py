@@ -14,11 +14,12 @@ from unittest.mock import patch
 import configure
 import mem0_mcp
 from model_api import embedding_connection, resolve_embedding
-from openai import OpenAI, DefaultHttpxClient
+from openai import OpenAI, DefaultHttpxClient, APIStatusError
 from mem0.embeddings.openai import OpenAIEmbedding
 from mem0.configs.embeddings.base import BaseEmbedderConfig
 
 hits = []
+cloud_status = 200
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -36,6 +37,9 @@ class Handler(BaseHTTPRequestHandler):
         cloud = self.path.startswith('/cloud/')
         assert body['model'] == ('@cf/baai/bge-m3' if cloud else 'bge-m3')
         assert self.headers['Authorization'] == ('Bearer test-token' if cloud else 'Bearer local-no-key')
+        if cloud and cloud_status != 200:
+            self.send_error(cloud_status)
+            return
         self.send_response(200)
         self.end_headers()
         self.wfile.write(json.dumps({'data': [{'index': 0, 'embedding': [0.1]*1024}]}).encode())
@@ -105,6 +109,27 @@ try:
         with OpenAI(api_key='unused', base_url=base, max_retries=0,
                     http_client=DefaultHttpxClient(transport=mem0_mcp.ModelFailoverTransport(primary, secondary, 'embedding'))) as client:
             assert len(client.embeddings.create(model='unused', input='ping').data[0].embedding) == 1024
+
+    # Transient primary HTTP errors must use the secondary embedding model.
+    for cloud_status in (429, 500, 502, 503, 504):
+        before = len(hits)
+        with OpenAI(api_key='unused', base_url=base, max_retries=0,
+                    http_client=DefaultHttpxClient(transport=mem0_mcp.ModelFailoverTransport(cloud, local, 'embedding'))) as client:
+            assert len(client.embeddings.create(model='unused', input='ping').data[0].embedding) == 1024
+        assert [hit[0] for hit in hits[before:]] == ['/cloud/embeddings', '/local/embeddings']
+    # Permanent errors and errors without a secondary must propagate without another request.
+    for cloud_status, secondary in ((400, local), (401, local), (403, local), (404, local), (429, None)):
+        before = len(hits)
+        with OpenAI(api_key='unused', base_url=base, max_retries=0,
+                    http_client=DefaultHttpxClient(transport=mem0_mcp.ModelFailoverTransport(cloud, secondary, 'embedding'))) as client:
+            try:
+                client.embeddings.create(model='unused', input='ping')
+            except APIStatusError as error:
+                assert error.status_code == cloud_status
+            else:
+                raise AssertionError('Embedding HTTP error must propagate')
+        assert [hit[0] for hit in hits[before:]] == ['/cloud/embeddings']
+    cloud_status = 200
 
     # Every type prompt defaults to frontier, even when resuming legacy local settings.
     choices = []
