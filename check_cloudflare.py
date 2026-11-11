@@ -48,6 +48,34 @@ base = f'http://127.0.0.1:{server.server_port}'
 cloud = dict(provider='cloudflare', api_url=base+'/cloud/embeddings', model='@cf/baai/bge-m3', api_key='test-token')
 local = dict(provider='local', api_url=base+'/local/embeddings')
 try:
+    # Rate-limited frontier checks must still save all four user-entered connections.
+    with tempfile.TemporaryDirectory() as tmp:
+        config = Path(tmp) / 'mem0.json'
+        config.write_text(json.dumps({'unrelated': 'preserved'}))
+        answers = ['frontier', 'gemini', 'custom-model', '', 'inference-secret'] * 2
+        answers += ['frontier', 'cloudflare', 'a'*32, 'embedding-secret'] * 2
+        with patch.object(configure, 'MEM0_CONFIG', config), \
+                patch('builtins.input', side_effect=answers), \
+                patch.object(configure.urllib.request.OpenerDirector, 'open',
+                    side_effect=configure.urllib.error.HTTPError('https://example.com', 429, 'Too Many Requests', {}, None)), \
+                patch.object(configure.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                    [], 22, '\n429', 'curl: (22) HTTP 429')), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            configure.llm_settings()
+        saved = json.loads(config.read_text())
+        assert saved['unrelated'] == 'preserved'
+        for suffix in ('', '_secondary'):
+            assert saved['inference_provider'+suffix] == 'gemini'
+            assert saved['inference_model'+suffix] == 'custom-model'
+            assert saved['inference_api_key'+suffix] == 'inference-secret'
+            assert saved['inference_api_url'+suffix] == 'https://generativelanguage.googleapis.com/v1beta'
+            assert saved['embedding_provider'+suffix] == 'cloudflare'
+            assert saved['embedding_api_key'+suffix] == 'embedding-secret'
+            assert saved['embedding_model'+suffix] == '@cf/baai/bge-m3'
+            assert saved['embedding_api_url'+suffix] == 'https://api.cloudflare.com/client/v4/accounts/'+'a'*32+'/ai/v1/embeddings'
+        assert '429' in output.getvalue()
+        assert 'inference-secret' not in output.getvalue() and 'embedding-secret' not in output.getvalue()
+
     # After a failed Cloudflare check, entering local at the retry prompt must switch providers.
     with tempfile.TemporaryDirectory() as tmp:
         config = Path(tmp) / 'mem0.json'
@@ -91,7 +119,7 @@ try:
     with patch('builtins.input', return_value=''):
         assert configure.model_choice('type', ('local','frontier'), 'frontier') == 'frontier'
 
-    response = subprocess.CompletedProcess([],0,json.dumps({'data':[{'embedding':[0.1]*1024}]}),'')
+    response = subprocess.CompletedProcess([],0,json.dumps({'data':[{'embedding':[0.1]*1024}]})+'\n200','')
     with patch.object(configure.subprocess, 'run', return_value=response) as opened, \
             patch('builtins.input', side_effect=['', 'a'*32, 'test-token']), contextlib.redirect_stdout(io.StringIO()):
         selected = configure.frontier_embedding({}, 'primary')
@@ -123,7 +151,7 @@ try:
         store.embedding_model.client.close()
 
     # Wrong dimensions fail validation; retries retain the unsaved account and secret.
-    responses=[subprocess.CompletedProcess([],0,json.dumps({'data':[{'embedding':[0.1]*n}]}),'') for n in (768,1024)]
+    responses=[subprocess.CompletedProcess([],0,json.dumps({'data':[{'embedding':[0.1]*n}]})+'\n200','') for n in (768,1024)]
     with patch.object(configure.subprocess,'run',side_effect=responses), \
             patch('builtins.input',side_effect=['','a'*32,'test-token','','','']), \
             contextlib.redirect_stdout(io.StringIO()) as output:

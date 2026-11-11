@@ -179,6 +179,22 @@ try:
         assert 'groq-secret' not in output.getvalue()
     status = 200
 
+    # Both Python and TLS-fallback curl checks preserve rate-limited inference inputs.
+    status = 429
+    for fallback in (False, True):
+        with contextlib.ExitStack() as stack:
+            if fallback:
+                stack.enter_context(patch.object(configure.urllib.request.OpenerDirector, 'open',
+                    side_effect=configure.urllib.error.URLError(ssl.SSLCertVerificationError('CA constraints rejected'))))
+            stack.enter_context(patch('builtins.input', side_effect=[
+                'groq', 'custom-model', base + '/groq/v1', 'groq-secret']))
+            output = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            selected = configure.frontier_inference({}, 'secondary')
+        assert selected == {'provider': 'groq', 'model': 'custom-model',
+                            'api_url': base + '/groq/v1', 'api_key': 'groq-secret'}
+        assert '429' in output.getvalue() and 'groq-secret' not in output.getvalue()
+    status = 200
+
     # OpenAI-compatible providers must validate, preserve inputs and route actual requests.
     for provider, secret, model in (('groq', 'groq-secret', 'openai/gpt-oss-20b'),
                                     ('cloudflare', 'cloudflare-secret', '@cf/openai/gpt-oss-20b')):

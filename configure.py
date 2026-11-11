@@ -306,7 +306,7 @@ def frontier_inference(existing, role):
         key_hint = '엔터: 직전 입력/기존 키 유지' if previous.get('api_key') else '필수'
         secret = input(f'API key (화면에 표시됩니다; {key_hint}): ').strip() or previous.get('api_key')
         connection = {'provider': provider, 'api_url': url, 'model': model, 'api_key': secret}
-        # Keep failed attempts in memory only; the caller saves after all validations pass.
+        # Keep attempts in memory; the caller saves after validation or HTTP 429.
         existing = connection
         parsed = urlparse(url)
         if (parsed.username is not None or parsed.password is not None
@@ -372,6 +372,9 @@ def frontier_inference(existing, role):
                 if provider == 'exaone' and json.loads(result['choices'][0]['message']['content']) != {'ok': True}:
                     raise ValueError('EXAONE did not return the requested JSON object')
         except (OSError, ValueError, TypeError, KeyError, IndexError, subprocess.TimeoutExpired) as error:
+            if isinstance(error, urllib.error.HTTPError) and error.code == 429:
+                print('HTTP 429: 사용량 제한으로 검증을 건너뛰고 입력값을 유지합니다. 설정 저장을 계속합니다.')
+                return connection
             detail = f'{type(error).__name__}: {error}'
             if isinstance(error, urllib.error.HTTPError):
                 detail = f'HTTP {error.code}: {error.reason}'
@@ -400,7 +403,7 @@ def frontier_inference(existing, role):
 
 
 def frontier_embedding(existing, role):
-    """Validate a real 1024-dimensional BGE-M3 vector before saving credentials."""
+    """Validate BGE-M3 credentials, allowing settings to be saved on HTTP 429."""
     existing = dict(existing)
     while True:
         if model_choice(f'Mem0 embedding {role} provider', ('cloudflare', 'local'), 'cloudflare') == 'local':
@@ -423,12 +426,16 @@ def frontier_embedding(existing, role):
                 'curl', '--disable', '--fail', '--silent', '--show-error', '--max-time', '10',
                 '--proto', '=https', '--request', 'POST', target,
                 '--header', 'Content-Type: application/json', '--data', json.dumps(body),
-                '--config', '-',
+                '--config', '-', '--write-out', '\n%{http_code}',
             ], input='header = ' + json.dumps('Authorization: Bearer ' + secret) + '\n',
                 capture_output=True, text=True, timeout=15)
+            response_body, _, response_status = result.stdout.rpartition('\n')
+            if result.returncode == 22 and response_status == '429':
+                print('HTTP 429: 사용량 제한으로 검증을 건너뛰고 입력값을 유지합니다. 설정 저장을 계속합니다.')
+                return connection
             if result.returncode:
                 raise ValueError(result.stderr.strip() or 'Cloudflare curl request failed')
-            validate_response(json.loads(result.stdout), 'embedding')
+            validate_response(json.loads(response_body), 'embedding')
         except (OSError, ValueError, TypeError, subprocess.TimeoutExpired) as error:
             detail = f'{type(error).__name__}: {error}'.replace(secret, '[REDACTED]')
             detail = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', detail)[:800]
@@ -444,7 +451,7 @@ def frontier_embedding(existing, role):
 
 
 def mem0_model_settings(data):
-    """Validate all model connections before the caller atomically saves settings."""
+    """Check model connections, allowing frontier HTTP 429, before atomic saving."""
     for role in ('primary', 'secondary'):
         suffix = '_secondary' if role == 'secondary' else ''
         existing = inference_connection(data, secondary=role == 'secondary')

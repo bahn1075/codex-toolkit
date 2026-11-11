@@ -189,7 +189,8 @@ API 토큰과 32자리 Account ID를 입력하면 해당 계정의 기본 URL을
 EXAONE은 기본 모델 `k-exaone_v2.5`와 `https://api.exaone.ai/v1/chat/completions`를
 Enter로 선택하고 EXAONE API 키를 입력합니다. 항상 추론을 수행하므로 Mem0 요청에는
 `reasoning_effort=low`를 사용합니다. 설정 검증에서 JSON 출력을 확인하며,
-서비스 한도나 장애로 검증되지 않은 설정은 저장하지 않습니다.
+Frontier 추론·임베딩 설정 검증에서 HTTP 429(사용량 제한)가 발생하면 검증을 건너뛰고 입력값을 그대로 저장합니다.
+이 경우 키·모델·임베딩 차원의 유효성은 확인되지 않았으며, 다른 오류는 기존처럼 재입력받습니다.
 Gemini와 Anthropic은 공급자 고유 API로 요청하며 JSON schema 출력이 가능한 모델을
 사용해야 합니다. API 키는 붙여넣기 확인을 위해 입력 중 터미널에 표시하며,
 `~/.codex/mem0.json`(권한 600)에 저장합니다. 오류 메시지에서는 키를 가립니다.
@@ -197,7 +198,7 @@ Gemini 설정 검증은 답변을 생성하지 않고 모델 정보 조회로 �
 확인하며 최대 10초 대기합니다. 실제 답변 생성과 JSON 출력 처리는 Mem0 사용 시 수행합니다.
 기존 공급자·모델·주소·키는 Enter로 유지할 수 있고, local로 전환하면 해당 역할의 키를 제거합니다.
 검증 실패 시 HTTP 상태와 키를 가린 서버 오류를 표시하며, 재입력에서도 직전에 입력한
-모델·주소·키를 Enter로 유지합니다. 실패한 입력은 검증이 끝나기 전까지 파일에 저장하지 않습니다.
+모델·주소·키를 Enter로 유지합니다. HTTP 429 이외의 실패한 입력은 검증이 끝나기 전까지 파일에 저장하지 않습니다.
 
 **Gemini 추론 + bge-m3 임베딩** 구성에서는 inference를 frontier/gemini로 선택하고,
 embedding primary/secondary에서 `local`을 선택한 뒤 기존 bge-m3 서버 URL을 Enter로 유지하세요.
