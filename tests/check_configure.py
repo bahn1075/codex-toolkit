@@ -1,4 +1,5 @@
-"""Run with ~/.codex/toolkit/venv/bin/python check_configure.py."""
+"""Run with ~/.codex/toolkit/venv/bin/python tests/check_configure.py."""
+from _paths import ROOT
 import contextlib
 import io
 import json
@@ -17,10 +18,11 @@ model_response = json.dumps({'choices': [{'message': {'content': 'pong'}}],
 
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
-    source = Path(__file__).resolve().parent
+    source = ROOT
     (root / 'setup.sh').write_text((source / 'setup.sh').read_text())
-    (root / 'toolkit.sh').write_text(
-        'source ' + shlex.quote(str(source / 'toolkit.sh')) + '\n'
+    (root / 'lib').mkdir()
+    (root / 'lib/toolkit.sh').write_text(
+        'source ' + shlex.quote(str(source / 'lib/toolkit.sh')) + '\n'
         'CT_HOME="$SCRIPT_DIR/home"\nCT_ROOT="$CT_HOME/toolkit"\n'
         'preflight() { :; }\nacquire_lock() { :; }\n'
         'bootstrap() { echo RESUMED; }\nsnapshot_configuration() { :; }\n'
@@ -98,8 +100,8 @@ assert doc['tui']['status_line'] == [
     'estimated-thread-cost', 'task-progress',
 ]
 assert doc['tui']['status_line_use_colors'] is True
-assert 'serena_projects.py' in Path(__file__).with_name('toolkit.sh').read_text()
-assert 'install_memory' not in Path(__file__).with_name('setup.sh').read_text()
+assert 'serena_projects.py' in (ROOT / 'lib/toolkit.sh').read_text()
+assert 'install_memory' not in (ROOT / 'setup.sh').read_text()
 
 computer_use_doc = tomlkit.parse('''[mcp_servers.node_repl.env]
 SKY_CUA_SERVICE_PATH = "/Applications/Codex Computer Use.app"
@@ -162,10 +164,10 @@ with patch.object(c, 'config', return_value=status_doc), \
     else:
         raise AssertionError('final status must reject a Headroom proxy configuration')
 
-toolkit = Path(__file__).with_name('toolkit.sh').read_text()
+toolkit = (ROOT / 'lib/toolkit.sh').read_text()
 assert 'CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-mcp}' in toolkit
 assert 'CT_HEADROOM_MODE must be mcp.' in toolkit
-assert "state['codex'] = os.environ['CT_CODEX']" in Path(__file__).with_name('configure.py').read_text()
+assert "state['codex'] = os.environ['CT_CODEX']" in (ROOT / 'lib/configure.py').read_text()
 
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
@@ -184,7 +186,7 @@ with tempfile.TemporaryDirectory() as tmp:
     npm_log = root / 'npm.log'
     result = subprocess.run(['bash', '-c', r'''
 set -Eeuo pipefail
-source "$1/toolkit.sh"
+source "$1/lib/toolkit.sh"
 mock_brew() { printf 'BREW %s\n' "$*"; }
 mock_uv() { printf 'UV %s\n' "$*"; }
 mock_npm() { printf 'NPM %s\n' "$*"; printf '%s\n' "$*" >> "$NPM_LOG"; }
@@ -205,7 +207,7 @@ CT_PY=:
 CT_BOOT_PY=/python
 NPM_LOG=$3
 install_packages
-''', 'check', str(Path(__file__).resolve().parent), str(toolkit_root), str(npm_log)],
+''', 'check', str(ROOT), str(toolkit_root), str(npm_log)],
         capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert '@nanonets/graft@latest' not in result.stdout
@@ -218,7 +220,7 @@ with tempfile.TemporaryDirectory() as tmp:
     home.mkdir()
     result = subprocess.run(['bash', '-c', r'''
 set -Eeuo pipefail
-source "$1/toolkit.sh"
+source "$1/lib/toolkit.sh"
 mock_brew() {
   case "$*" in
     'list --formula codex'|'list --cask codex') return 0 ;;
@@ -234,7 +236,7 @@ curl() {
 CT_BREW=mock_brew
 install_codex
 printf 'CODEX=%s\n' "$CT_CODEX"
-''', 'check', str(Path(__file__).resolve().parent)], env={**__import__('os').environ, 'HOME': str(home)},
+''', 'check', str(ROOT)], env={**__import__('os').environ, 'HOME': str(home)},
         capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert 'uninstall --formula codex' in result.stdout
@@ -344,7 +346,7 @@ for auth_exit, tty_exit, login_exit, plugin_exit, expected in (
         (1, 0, 1, 0, 'pending-login')):
     result = subprocess.run(['bash', '-c', '''
 set -Eeuo pipefail
-source "$1/toolkit.sh"
+source "$1/lib/toolkit.sh"
 SCRIPT_DIR=$1
 auth_exit=$2 tty_exit=$3 login_exit=$4 plugin_exit=$5
 mock_codex() {
@@ -361,7 +363,7 @@ CT_CODEX=mock_codex
 CT_PY=mock_python
 install_plugins
 printf 'FAILURES=%s\\n' "$CT_FAILURES"
-''', 'check', str(Path(__file__).resolve().parent),
+''', 'check', str(ROOT),
         *map(str, (auth_exit, tty_exit, login_exit, plugin_exit))],
         capture_output=True, text=True, check=True)
     assert f'status superpowers_install {expected}' in result.stdout, result.stdout
@@ -373,7 +375,7 @@ for existing, list_exit, install_exit in ((True, 0, 0), (False, 0, 0),
                                           (False, 0, 1), (False, 1, 0)):
     result = subprocess.run(['bash', '-c', '''
 set -Eeuo pipefail
-source "$1/toolkit.sh"
+source "$1/lib/toolkit.sh"
 SCRIPT_DIR=$1
 existing=$2 list_exit=$3 install_exit=$4
 mock_python() { printf 'STATE %s\\n' "$*"; }
@@ -388,7 +390,7 @@ code() {
 CT_PY=mock_python CT_CODEX=mock_codex
 configure_core
 printf 'FAILURES=%s\\n' "$CT_FAILURES"
-''', 'check', str(Path(__file__).resolve().parent), str(int(existing)), str(list_exit), str(install_exit)],
+''', 'check', str(ROOT), str(int(existing)), str(list_exit), str(install_exit)],
         capture_output=True, text=True, check=True)
     assert ('EXTENSION_INSTALL' in result.stdout) == (not existing), result.stdout
     assert ('status vscode_extension_installed true' in result.stdout) == (
@@ -399,7 +401,7 @@ printf 'FAILURES=%s\\n' "$CT_FAILURES"
 for failed in ('', 'doctor', 'component'):
     result = subprocess.run(['bash', '-c', '''
 set -Eeuo pipefail
-source "$1/toolkit.sh"
+source "$1/lib/toolkit.sh"
 CT_PY=mock_python
 CT_CODEX=mock_codex
 SCRIPT_DIR=$1
@@ -408,7 +410,7 @@ if [ "$failed" = component ]; then CT_FAILURES=1; fi
 mock_python() { [ "$2" != "$failed" ]; }
 mock_codex() { [ "$*" = 'mcp list' ]; }
 finish
-''', 'check', str(Path(__file__).resolve().parent), failed], capture_output=True, text=True)
+''', 'check', str(ROOT), failed], capture_output=True, text=True)
     assert (result.returncode == 0) == (not failed)
     assert ('Install/configuration pass finished' in result.stdout) == (not failed)
 

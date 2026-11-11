@@ -1,3 +1,4 @@
+from _paths import ROOT
 import os
 import shlex
 import subprocess
@@ -6,7 +7,7 @@ from pathlib import Path
 
 
 def test_setup_preserves_existing_home(option=None):
-    source = Path(__file__).resolve().parent
+    source = ROOT
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         home = root / 'home'
@@ -16,8 +17,9 @@ def test_setup_preserves_existing_home(option=None):
         (codex / 'auth.json').write_text('login')
         (codex / 'config.toml').write_text('user settings')
         (root / 'setup.sh').write_text((source / 'setup.sh').read_text())
-        (root / 'toolkit.sh').write_text(
-            'source ' + shlex.quote(str(source / 'toolkit.sh')) + '\n'
+        (root / 'lib').mkdir()
+        (root / 'lib/toolkit.sh').write_text(
+            'source ' + shlex.quote(str(source / 'lib/toolkit.sh')) + '\n'
             'preflight() { :; }\nacquire_lock() { :; }\n'
             'remove_homebrew_codex() { :; }\nnpm() { return 1; }\n'
             'bootstrap() { mkdir -p "$CT_ROOT"; echo "{}" > "$CT_ROOT/install-state.json"; }\n'

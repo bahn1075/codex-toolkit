@@ -1,11 +1,11 @@
-"""Run with ~/.codex/toolkit/venv/bin/python check_serena_projects.py."""
+"""Run with ~/.codex/toolkit/venv/bin/python tests/check_serena_projects.py."""
+from _paths import ROOT
 import os
 import subprocess
 import tempfile
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
 SERENA = Path.home() / '.codex/toolkit/bin/serena'
 SERENA_PYTHON = Path.home() / '.codex/toolkit/uv-tools/serena-agent/bin/python'
 
@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory() as tmp:
     local = project / '.serena/project.local.yml'
     local.write_text('language_servers:\n- bash\n')
 
-    result = subprocess.run([SERENA_PYTHON, ROOT / 'serena_projects.py'],
+    result = subprocess.run([SERENA_PYTHON, ROOT / 'lib/serena_projects.py'],
                             env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     text = config.read_text()

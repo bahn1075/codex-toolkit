@@ -16,4 +16,4 @@ mkdir "$HOME/.codex-toolkit-setup.lock" 2>/dev/null || { printf 'Setup/update/re
 trap 'rmdir "$HOME/.codex-toolkit-setup.lock" 2>/dev/null || true' EXIT
 REMOVE_PY="$HOME/.codex/toolkit/venv/bin/python"
 [ -x "$REMOVE_PY" ] || REMOVE_PY=$(command -v python3)
-"$REMOVE_PY" "$SCRIPT_DIR/remove.py" "$@"
+"$REMOVE_PY" "$SCRIPT_DIR/lib/remove.py" "$@"

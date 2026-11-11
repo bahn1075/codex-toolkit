@@ -1,4 +1,5 @@
 """Cloudflare embedding setup and transport checks without external services."""
+from _paths import ROOT
 import contextlib
 import io
 import json

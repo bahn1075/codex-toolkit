@@ -1,4 +1,5 @@
 """No-network self-check for the document importer."""
+from _paths import ROOT
 import json
 import io
 from pathlib import Path
@@ -8,7 +9,6 @@ import uuid
 
 from contextlib import redirect_stdout
 from unittest.mock import patch
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 import import_memories as importer
 
 

@@ -15,7 +15,7 @@ import time
 
 # The importer must not send archived conversation metadata to Mem0 telemetry.
 os.environ['MEM0_TELEMETRY'] = 'false'
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'lib'))
 from mem0_session import batches, complete_end, process_job, redact, task_message, write_json
 
 

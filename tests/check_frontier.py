@@ -1,4 +1,5 @@
 """Native frontier inference checks with local servers; no paid APIs or Oracle."""
+from _paths import ROOT
 import contextlib
 import io
 import json

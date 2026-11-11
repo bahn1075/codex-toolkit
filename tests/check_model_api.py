@@ -1,4 +1,5 @@
-"""Run with ~/.codex/toolkit/venv/bin/python check_model_api.py."""
+"""Run with ~/.codex/toolkit/venv/bin/python tests/check_model_api.py."""
+from _paths import ROOT
 import importlib.util
 import json
 import threading

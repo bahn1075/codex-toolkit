@@ -2,7 +2,7 @@
 # Update only this toolkit's packages; never reset Codex or its login/history.
 set -Eeuo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-source "$SCRIPT_DIR/toolkit.sh"
+source "$SCRIPT_DIR/lib/toolkit.sh"
 case "${1:-}" in
   --help|-h) printf '%s\n' 'Usage: bash update.sh  (close active Codex/VS Code sessions first)'; exit 0 ;;
   '') ;;

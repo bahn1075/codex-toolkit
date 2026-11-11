@@ -1,4 +1,5 @@
 """Runnable URL-only setup and real OpenAI client failover checks; no Oracle."""
+from _paths import ROOT
 import contextlib
 import io
 import json
@@ -58,9 +59,10 @@ with tempfile.TemporaryDirectory() as tmp:
 # --llm must exit before any install/reset path, including normal preflight.
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
-    source = Path(__file__).resolve().parent
+    source = ROOT
     (root / 'setup.sh').write_text((source / 'setup.sh').read_text())
-    (root / 'toolkit.sh').write_text('configure_llm() { echo URL_ONLY; }\n'
+    (root / 'lib').mkdir()
+    (root / 'lib/toolkit.sh').write_text('configure_llm() { echo URL_ONLY; }\n'
         'usage() { :; }\ndie() { exit 1; }\npreflight() { exit 99; }\n')
     result = subprocess.run(['bash', str(root / 'setup.sh'), '--llm'], capture_output=True, text=True)
     assert result.returncode == 0 and result.stdout.strip() == 'URL_ONLY', result

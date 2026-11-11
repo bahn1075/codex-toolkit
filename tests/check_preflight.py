@@ -1,4 +1,5 @@
 """Exercise preflight without installing packages or changing the host."""
+from _paths import ROOT
 import os
 import pathlib
 import shlex
@@ -8,7 +9,6 @@ import subprocess
 import unittest
 
 
-ROOT = pathlib.Path(__file__).resolve().parent
 
 
 class PreflightTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class PreflightTests(unittest.TestCase):
         script = r'''
 set -Eeuo pipefail
 SCRIPT_DIR=$PWD
-source ./toolkit.sh
+source ./lib/toolkit.sh
 HOME=/tmp/toolkit-preflight-user
 CT_HOME=$HOME/.codex
 unset CODEX_HOME
@@ -145,7 +145,8 @@ class BootstrapPythonTests(unittest.TestCase):
             toolkit = root / "toolkit"
             bundle = toolkit / "bundle"
             bundle.mkdir(parents=True)
-            (bundle / "configure.py").write_text("")
+            (bundle / "lib").mkdir()
+            (bundle / "lib/configure.py").write_text("")
             candidate = root / "system-python"
             candidate.write_text("#!/bin/sh\nexit 1\n" if broken else
                                  "#!/bin/sh\nexec " + shlex.quote(sys.executable) + ' "$@"\n')
@@ -156,7 +157,7 @@ class BootstrapPythonTests(unittest.TestCase):
                 interpreter.symlink_to(candidate)
             script = r"""
 set -Eeuo pipefail
-source ./toolkit.sh
+source ./lib/toolkit.sh
 CT_ROOT="$TEST_ROOT/toolkit"
 SCRIPT_DIR="$CT_ROOT/bundle"
 CT_PREFIX="$TEST_ROOT/brew"
@@ -248,7 +249,7 @@ printf 'SELECTED=%s\n' "$CT_BOOT_PY"
                         "exec(sys.argv[2])\n")
                     wrapper.chmod(0o755)
                     result = subprocess.run(["bash", "-c",
-                        'source ./toolkit.sh; python_compatible "$1"', "check", str(wrapper)],
+                        'source ./lib/toolkit.sh; python_compatible "$1"', "check", str(wrapper)],
                         cwd=ROOT, text=True, capture_output=True)
                     self.assertEqual(result.returncode == 0, accepted, result.stderr)
 

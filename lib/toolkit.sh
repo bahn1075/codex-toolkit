@@ -43,7 +43,7 @@ configure_llm() {
   command -v curl >/dev/null || die 'curl is required to validate model API URLs.'
   acquire_lock
   CT_STAGE=llm-settings
-  "$CT_PY" "$SCRIPT_DIR/configure.py" llm-settings
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" llm-settings
   note 'Model API settings saved. Restart Mem0/Codex to load the settings.'
 }
 build_tools_available() {
@@ -153,14 +153,16 @@ bootstrap() {
   mkdir -p "$CT_ROOT/bin" "$CT_ROOT/repos" "$CT_ROOT/logs" "$CT_ROOT/bundle"
   # Keep the installer/update bundle available after the downloaded copy is removed.
   if [ "$SCRIPT_DIR" != "$CT_ROOT/bundle" ]; then
-    for ct_file in setup.sh update.sh remove.sh remove.py toolkit.sh check_setup.py configure.py headroom_setup.py mem0_mcp.py mem0_session.py model_api.py serena_projects.py policy.md README.md check_headroom.py check_preflight.py check_configure.py check_remove.py check_mem0_session.py check_mem0_tasks.py check_mem0_chunks.py check_model_api.py check_llm.py check_frontier.py check_cloudflare.py; do
-      cp "$SCRIPT_DIR/$ct_file" "$CT_ROOT/bundle/$ct_file"
-    done
-    mkdir -p "$CT_ROOT/bundle/mem0_import"
-    cp "$SCRIPT_DIR/mem0_import/import_memories.py" "$CT_ROOT/bundle/mem0_import/import_memories.py"
-    cp "$SCRIPT_DIR/mem0_import/check_import_memories.py" "$CT_ROOT/bundle/mem0_import/check_import_memories.py"
-    cp "$SCRIPT_DIR/mem0_import/import_memories.sh" "$CT_ROOT/bundle/mem0_import/import_memories.sh"
+    (
+      cd "$SCRIPT_DIR"
+      for ct_file in setup.sh update.sh remove.sh README.md lib/*.py lib/*.sh tests/*.py docs/policy.md tools/mem0_import/*.py tools/mem0_import/*.sh tools/mem0_import/*.sql; do
+        mkdir -p "$CT_ROOT/bundle/$(dirname -- "$ct_file")"
+        cp "$SCRIPT_DIR/$ct_file" "$CT_ROOT/bundle/$ct_file"
+      done
+    )
   fi
+  # Generated launchers must survive removal of the downloaded source directory.
+  SCRIPT_DIR="$CT_ROOT/bundle"
   if [ ! -x "$CT_ROOT/venv/bin/python" ]; then
     "$CT_UV" venv --python "$CT_BOOT_PY" "$CT_ROOT/venv"
   fi
@@ -172,7 +174,7 @@ bootstrap() {
   CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-mcp}
   [ "$CT_HEADROOM_MODE" = mcp ] || die 'CT_HEADROOM_MODE must be mcp.'
   export CT_HEADROOM_MODE CT_PREFIX CT_UV
-  "$CT_PY" "$SCRIPT_DIR/configure.py" state-init
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" state-init
 }
 snapshot_configuration() {
   CT_STAGE=backup
@@ -189,8 +191,8 @@ install_packages() {
   install_codex
   # Official Python packages; isolated from the user's other uv tools.
   "$CT_UV" tool install --upgrade --python "$CT_BOOT_PY" serena-agent
-  ct_headroom_hardware=$("$CT_PY" "$SCRIPT_DIR/headroom_setup.py" install "$CT_BOOT_PY" "$CT_UV" "$CT_ROOT")
-  "$CT_PY" "$SCRIPT_DIR/configure.py" headroom-hardware "$ct_headroom_hardware"
+  ct_headroom_hardware=$("$CT_PY" "$SCRIPT_DIR/lib/headroom_setup.py" install "$CT_BOOT_PY" "$CT_UV" "$CT_ROOT")
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" headroom-hardware "$ct_headroom_hardware"
   # Oracle AI Vector Search support is not yet in the PyPI 1.0.11 release.
   "$CT_UV" pip install --python "$CT_ROOT/venv/bin/python" --upgrade \
     'mem0ai @ git+https://github.com/mem0ai/mem0.git@c7ee362aff94a369af70f13f2b4f853f6793ff4c' \
@@ -205,8 +207,8 @@ install_packages() {
   fi
   [ -s "$ct_repo/AGENTS.md" ] || die 'Ponytail AGENTS.md is missing; upstream layout changed.'
   "$CT_ROOT/bin/serena" init
-  "$CT_ROOT/uv-tools/serena-agent/bin/python" "$SCRIPT_DIR/serena_projects.py"
-  "$CT_PY" "$SCRIPT_DIR/configure.py" record-packages
+  "$CT_ROOT/uv-tools/serena-agent/bin/python" "$SCRIPT_DIR/lib/serena_projects.py"
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" record-packages
 }
 install_codex() {
   note 'Installing/updating Codex with the official native installer.'
@@ -220,8 +222,8 @@ install_codex() {
 configure_core() {
   CT_STAGE=configuration
   note 'Applying shared CLI/IDE MCP config, global instructions and shell aliases.'
-  "$CT_PY" "$SCRIPT_DIR/configure.py" remove-claude-mem
-  "$CT_PY" "$SCRIPT_DIR/configure.py" configure
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" remove-claude-mem
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" configure
   "$CT_CODEX" mcp list
   # Use VS Code's official extension identifier. It shares ~/.codex/config.toml.
   if command -v code >/dev/null; then
@@ -237,24 +239,24 @@ configure_core() {
       printf '%s\n' 'VS Code extension installation failed; install/update it in VS Code.' >&2
       CT_FAILURES=$((CT_FAILURES + 1))
     elif [ "$ct_extension_added" = 1 ]; then
-      "$CT_PY" "$SCRIPT_DIR/configure.py" status vscode_extension_installed true
+      "$CT_PY" "$SCRIPT_DIR/lib/configure.py" status vscode_extension_installed true
     fi
   fi
 }
 install_mem0() {
   CT_STAGE=mem0
   note 'Configuring Mem0 with Oracle AI Vector Search, inference APIs and local/Cloudflare embeddings.'
-  "$CT_PY" "$SCRIPT_DIR/configure.py" mem0-settings
-  "$CT_PY" "$SCRIPT_DIR/configure.py" mem0-hooks
-  "$CT_PY" "$SCRIPT_DIR/configure.py" status mem0_install configured
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" mem0-settings
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" mem0-hooks
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" status mem0_install configured
 }
 configure_headroom() {
   CT_STAGE=headroom
-  "$CT_PY" "$SCRIPT_DIR/configure.py" direct-provider
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" direct-provider
   if [ -f "$HOME/.headroom/deploy/codex-toolkit/manifest.json" ]; then
     "$CT_ROOT/bin/headroom" install remove --profile codex-toolkit
   fi
-  "$CT_PY" "$SCRIPT_DIR/configure.py" status headroom_runtime mcp-only
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" status headroom_runtime mcp-only
 }
 install_plugins() {
   CT_STAGE=plugins
@@ -269,7 +271,7 @@ install_plugins() {
       ct_plugin_status=installed
     fi
   fi
-  "$CT_PY" "$SCRIPT_DIR/configure.py" status superpowers_install "$ct_plugin_status"
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" status superpowers_install "$ct_plugin_status"
   if [ "$ct_plugin_status" != installed ]; then
     CT_FAILURES=$((CT_FAILURES + 1))
     printf '%s\n' \
@@ -281,9 +283,9 @@ install_plugins() {
 }
 finish() {
   CT_STAGE=verification
-  "$CT_PY" "$SCRIPT_DIR/configure.py" validate
-  "$CT_PY" "$SCRIPT_DIR/configure.py" doctor
-  "$CT_PY" "$SCRIPT_DIR/configure.py" final-status
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" validate
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" doctor
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" final-status
   "$CT_CODEX" mcp list
   if [ "$CT_FAILURES" -gt 0 ]; then
     printf 'Partial setup: %s stage(s) incomplete. Follow the reported recovery commands or rerun bash setup.sh --resume.\n' "$CT_FAILURES" >&2

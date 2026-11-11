@@ -161,7 +161,7 @@ def configure():
         shutil.rmtree(legacy_npm)
     instructions = CODEX / 'AGENTS.md'
     text = instructions.read_text() if instructions.exists() else ''
-    text = replace_block(text, 'CODEX-TOOLKIT', (BUNDLE / 'policy.md').read_text())
+    text = replace_block(text, 'CODEX-TOOLKIT', (BUNDLE.parent / 'docs/policy.md').read_text())
     pony = (ROOT / 'repos/ponytail/AGENTS.md').read_text()
     text = replace_block(text, 'PONYTAIL-UPSTREAM', pony)
     write(instructions, text)
@@ -192,9 +192,9 @@ def configure():
             # Preserve an existing symlink to a dotfiles checkout.
             write(rc.resolve() if rc.is_symlink() else rc, updated,
                   (rc.stat().st_mode & 0o777) if rc.exists() else 0o600)
-    launcher('codex-doctor', [sys.executable, str(ROOT / 'bundle/configure.py'), 'doctor'])
-    launcher('mem0-import', [sys.executable, str(BUNDLE / 'mem0_import/import_memories.py')])
-    launcher('mem0-import-prompt', ['bash', str(BUNDLE / 'mem0_import/import_memories.sh')])
+    launcher('codex-doctor', [sys.executable, str(ROOT / 'bundle/lib/configure.py'), 'doctor'])
+    launcher('mem0-import', [sys.executable, str(BUNDLE.parent / 'tools/mem0_import/import_memories.py')])
+    launcher('mem0-import-prompt', ['bash', str(BUNDLE.parent / 'tools/mem0_import/import_memories.sh')])
 
 
 def mem0_api_url(prompt, example, payload, existing=None, response_kind=None):

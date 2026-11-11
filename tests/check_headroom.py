@@ -1,4 +1,5 @@
-"""Run with toolkit/venv/bin/python -m unittest check_headroom."""
+"""Run with toolkit/venv/bin/python tests/check_headroom.py."""
+from _paths import ROOT
 import pathlib
 import ssl
 import subprocess

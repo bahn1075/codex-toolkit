@@ -1,11 +1,10 @@
 # Completion checks
 
-Run from the repository root with the installed toolkit interpreter:
+Run checks from the repository root with ~/.codex/toolkit/venv/bin/python. Check scripts are under tests/ and use tests/_paths.py for imports.
 
-- `~/.codex/toolkit/venv/bin/python check_configure.py`
-- `~/.codex/toolkit/venv/bin/python check_graft.py`
-- `~/.codex/toolkit/venv/bin/python check_mem0_session.py`
-- `~/.codex/toolkit/venv/bin/python mem0_import/check_import_memories.py`
-- `git diff --check`
+- Execute tests/check_*.py directly for the full suite; tests/check_layout.py covers installed bundle copy, source-independent launchers, copied checks/importer and removal dry-run in temporary homes.
+- Use tests/check_serena_projects.py only when the installed Serena runtime is available.
+- Run bash -n on setup.sh, update.sh, remove.sh, lib/toolkit.sh and tools/mem0_import/import_memories.sh.
+- Run git diff --check.
 
-For README-only changes, all four offline checks still validate that documented commands and flows remain supported. Do not perform live package installation, login, Oracle writes, or cluster changes merely to verify a documentation edit.
+Choose checks appropriate to the change. Do not perform live package installation, login, Oracle writes or cluster changes merely for repository verification.

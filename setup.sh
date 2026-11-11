@@ -3,7 +3,7 @@
 # Run as the ordinary login user, outside ~/.codex. Remove with: bash remove.sh
 set -Eeuo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-source "$SCRIPT_DIR/toolkit.sh"
+source "$SCRIPT_DIR/lib/toolkit.sh"
 case "${1:-}" in
   --help|-h) usage; exit 0 ;;
   --llm) configure_llm; exit 0 ;;

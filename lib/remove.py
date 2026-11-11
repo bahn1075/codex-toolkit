@@ -87,7 +87,7 @@ def uninstall(home, dry_run=False):
     hooks_path = codex / 'hooks.json'
     if hooks_path.exists():
         hooks = json.loads(hooks_path.read_text())
-        owned_hooks = {str(root / 'bin/mem0-session'), str(root / 'bundle/mem0_session.py')}
+        owned_hooks = {str(root / 'bin/mem0-session'), str(root / 'bundle/mem0_session.py'), str(root / 'bundle/lib/mem0_session.py')}
         for event, groups in hooks.get('hooks', {}).items():
             for group in groups:
                 group['hooks'] = [h for h in group.get('hooks', [])

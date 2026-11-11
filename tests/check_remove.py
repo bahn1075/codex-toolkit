@@ -1,4 +1,5 @@
 """Offline removal checks: all writes/deletions stay in temporary homes."""
+from _paths import ROOT
 import contextlib
 import importlib.util
 import io
@@ -12,7 +13,7 @@ from unittest.mock import patch
 
 import tomlkit
 
-source = Path(__file__).resolve().parent
+source = ROOT / 'lib'
 assert (source / 'remove.py').exists(), 'Toolkit removal is missing'
 spec = importlib.util.spec_from_file_location('remove_toolkit', source / 'remove.py')
 r = importlib.util.module_from_spec(spec)

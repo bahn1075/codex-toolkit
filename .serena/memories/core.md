@@ -1,10 +1,9 @@
 # Project map
 
-- Personal Codex installation bundle for macOS/Linux; user entrypoints: `setup.sh` and `update.sh`.
-- Shared installer flow: `toolkit.sh`; configuration and doctor logic: `configure.py`.
-- Graft startup wrapper: `graft_mcp.py`.
-- Mem0 MCP and session hooks: `mem0_mcp.py`, `mem0_session.py`; document import: `mem0_import/`.
-- Offline checks: `check_configure.py`, `check_graft.py`, `check_mem0_session.py`, `mem0_import/check_import_memories.py`.
-- README is the operator guide and must match script behavior.
-
-Read `mem:tech_stack` for runtime constraints, `mem:conventions` for installer invariants, `mem:suggested_commands` for operator commands, and `mem:task_completion` for completion checks.
+- Personal Codex installation bundle for macOS/Linux; stable root entrypoints: setup.sh, update.sh, remove.sh.
+- lib/toolkit.sh: shared installer. lib/configure.py: configuration/doctor. Remaining runtime modules live together in lib/.
+- tests/check_*.py: directly runnable checks; tests/_paths.py resolves lib/ and tools/mem0_import/.
+- tools/mem0_import/: document importer, interactive shell wrapper and SQL.
+- docs/policy.md: managed instruction text. docs/superpowers/: design and implementation records.
+- Installed ~/.codex/toolkit/bundle mirrors this layout. bootstrap switches SCRIPT_DIR to the installed bundle before configuration so launchers survive deletion of downloaded sources.
+- README.md documents operator and verification commands. Do not run a real installer/remover to validate repository-only changes.

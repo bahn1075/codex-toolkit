@@ -1,4 +1,5 @@
-"""Run with ~/.codex/toolkit/venv/bin/python check_mem0_chunks.py (no network)."""
+"""Run with ~/.codex/toolkit/venv/bin/python tests/check_mem0_chunks.py (no network)."""
+from _paths import ROOT
 import json
 from pathlib import Path
 import tempfile

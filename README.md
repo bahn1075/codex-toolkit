@@ -3,6 +3,16 @@
 macOS와 Linux에서 Codex CLI·VS Code 확장과 개발용 MCP를 한 번에 설치하고,
 `~/.codex`의 공통 설정을 관리하는 개인용 설치 번들입니다.
 
+## 디렉터리 구조
+
+- [setup.sh](./setup.sh), [update.sh](./update.sh), [remove.sh](./remove.sh): 설치·업데이트·제거 진입점
+- [lib/](./lib/): 공통 설치 흐름과 Python 구현
+- [tests/](./tests/): 직접 실행할 수 있는 검증 스크립트
+- [tools/mem0_import/](./tools/mem0_import/): 문서 가져오기 도구와 SQL
+- [docs/](./docs/): 정책과 설계·구현 계획
+
+설치 번들도 같은 구조를 사용합니다. 기존 셸 진입점과 생성되는 편의 명령은 유지됩니다.
+
 ## 설치되는 구성
 
 | 구분 | 구성 요소 |
@@ -142,7 +152,7 @@ codex-doctor
 요청 완료 시 자동 저장을 추가한 뒤 Codex를 다시 시작하고 새 hook을 검토·신뢰하세요.
 
 ```bash
-~/.codex/toolkit/venv/bin/python ~/.codex/toolkit/bundle/configure.py mem0-hooks
+~/.codex/toolkit/venv/bin/python ~/.codex/toolkit/bundle/lib/configure.py mem0-hooks
 ```
 
 ### 구성요소 제거
@@ -330,7 +340,7 @@ backend는 `install-state.json`에 기록된 값(`onnx_cpu`, `onnx_coreml`, `pyt
 PyTorch 환경의 마지막 인자는 기록된 `torch_backend`로 바꿉니다.
 
 ```bash
-~/.codex/toolkit/uv-tools/headroom-ai/bin/python ~/.codex/toolkit/bundle/headroom_setup.py verify onnx_cpu cpu
+~/.codex/toolkit/uv-tools/headroom-ai/bin/python ~/.codex/toolkit/bundle/lib/headroom_setup.py verify onnx_cpu cpu
 ```
 
 ## 알아둘 점
@@ -353,7 +363,7 @@ PyTorch 환경의 마지막 인자는 기록된 `torch_backend`로 바꿉니다.
 `ml_tokens_saved: 0` 하나만으로 모델 실패를 판단하지 않습니다. 입력에 따라 원문을 유지할 수
 있으므로, doctor는 실제 추론 점수의 유효성, GPU 실행, MCP 압축·원문 복원·읽기 캐시를
 각각 검사합니다. 현재 기기가 GPU를 제공하지 않으면 ROCm 실기 검증은 해당 GPU 기기에서
-`headroom_setup.py verify`로 진행해야 합니다.
+`lib/headroom_setup.py verify`로 진행해야 합니다.
 
 근거: [PyTorch의 libdrm 패치](https://github.com/pytorch/pytorch/blob/v2.14.1/.ci/docker/common/install_rocm_drm.sh),
 [ModernBERT 원본 구성](https://huggingface.co/answerdotai/ModernBERT-base/blob/main/config.json),
@@ -371,7 +381,7 @@ PyTorch 환경의 마지막 인자는 기록된 `torch_backend`로 바꿉니다.
 
 ```bash
 git pull --ff-only
-cp headroom_setup.py ~/.codex/toolkit/bundle/headroom_setup.py
+cp lib/headroom_setup.py ~/.codex/toolkit/bundle/lib/headroom_setup.py
 ~/.codex/toolkit/bin/codex-doctor
 ```
 
@@ -403,17 +413,18 @@ OpenAI 호환 API에 `reasoning_effort: "none"`을 보내 Thinking을 비활성�
 설치된 toolkit 가상 환경으로 네트워크 없는 자체 검사를 실행할 수 있습니다.
 
 ```bash
-python3 check_preflight.py
-~/.codex/toolkit/venv/bin/python -m unittest check_headroom
-~/.codex/toolkit/venv/bin/python check_setup.py
-~/.codex/toolkit/venv/bin/python check_configure.py
-~/.codex/toolkit/venv/bin/python check_remove.py
-~/.codex/toolkit/venv/bin/python check_mem0_session.py
-~/.codex/toolkit/venv/bin/python check_mem0_tasks.py
-~/.codex/toolkit/venv/bin/python check_mem0_chunks.py
-~/.codex/toolkit/venv/bin/python check_model_api.py
-~/.codex/toolkit/venv/bin/python check_llm.py
-~/.codex/toolkit/venv/bin/python check_frontier.py
-~/.codex/toolkit/venv/bin/python check_cloudflare.py
-~/.codex/toolkit/venv/bin/python mem0_import/check_import_memories.py
+python3 tests/check_preflight.py
+~/.codex/toolkit/venv/bin/python tests/check_headroom.py
+~/.codex/toolkit/venv/bin/python tests/check_setup.py
+~/.codex/toolkit/venv/bin/python tests/check_configure.py
+~/.codex/toolkit/venv/bin/python tests/check_remove.py
+~/.codex/toolkit/venv/bin/python tests/check_mem0_session.py
+~/.codex/toolkit/venv/bin/python tests/check_mem0_tasks.py
+~/.codex/toolkit/venv/bin/python tests/check_mem0_chunks.py
+~/.codex/toolkit/venv/bin/python tests/check_model_api.py
+~/.codex/toolkit/venv/bin/python tests/check_llm.py
+~/.codex/toolkit/venv/bin/python tests/check_frontier.py
+~/.codex/toolkit/venv/bin/python tests/check_cloudflare.py
+~/.codex/toolkit/venv/bin/python tests/check_import_memories.py
+~/.codex/toolkit/venv/bin/python tests/check_layout.py
 ```
