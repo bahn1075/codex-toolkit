@@ -48,6 +48,27 @@ base = f'http://127.0.0.1:{server.server_port}'
 cloud = dict(provider='cloudflare', api_url=base+'/cloud/embeddings', model='@cf/baai/bge-m3', api_key='test-token')
 local = dict(provider='local', api_url=base+'/local/embeddings')
 try:
+    # After a failed Cloudflare check, entering local at the retry prompt must switch providers.
+    with tempfile.TemporaryDirectory() as tmp:
+        config = Path(tmp) / 'mem0.json'
+        config.write_text(json.dumps({'embedding_provider': 'cloudflare',
+            'embedding_api_url': 'https://api.cloudflare.com/client/v4/accounts/' + 'a'*32 + '/ai/v1/embeddings',
+            'embedding_model': '@cf/baai/bge-m3', 'embedding_api_key': 'old-secret'}))
+        def local_url(prompt, example, payload, existing, **kwargs):
+            return base + ('/local/embeddings' if kwargs.get('response_kind') == 'embedding' else '/chat/completions')
+        with patch.object(configure, 'MEM0_CONFIG', config), \
+                patch('builtins.input', side_effect=['local', 'local', 'frontier', 'cloudflare',
+                    'a'*32, 'new-secret', 'local', 'local']), \
+                patch.object(configure, 'mem0_api_url', side_effect=local_url), \
+                patch.object(configure.subprocess, 'run', return_value=subprocess.CompletedProcess([], 22, '', 'HTTP 403')), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            configure.llm_settings()
+        saved = json.loads(config.read_text())
+        assert saved['embedding_api_url'] == base + '/local/embeddings'
+        assert saved['embedding_api_url_secondary'] == base + '/local/embeddings'
+        assert 'embedding_api_key' not in saved and 'embedding_provider' not in saved
+        assert 'new-secret' not in output.getvalue()
+
     assert embedding_connection({'embedding_api_url': local['api_url']})['provider'] == 'local'
     assert resolve_embedding(cloud) == (base+'/cloud', '@cf/baai/bge-m3')
     for primary, secondary in ((cloud, local), (local, cloud), ({**cloud, 'api_url':base+'/down/embeddings'}, local),

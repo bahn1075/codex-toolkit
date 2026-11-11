@@ -281,6 +281,7 @@ def frontier_inference(existing, role):
                 'anthropic': 'https://api.anthropic.com/v1/messages',
                 'openai': 'https://api.openai.com/v1/chat/completions',
                 'groq': 'https://api.groq.com/openai/v1/chat/completions',
+                'exaone': 'https://api.exaone.ai/v1/chat/completions',
                 'cloudflare': ''}
     match = re.search(r'/accounts/([0-9a-fA-F]{32})/', existing.get('api_url') or '')
     account = match.group(1) if match else ''
@@ -298,7 +299,8 @@ def frontier_inference(existing, role):
                 previous = {key: value for key, value in previous.items() if key != 'api_url'}
             account = entered_account
             default_url = f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1/chat/completions'
-        model = input(f'Model ID [{previous.get("model") or ""}]: ').strip() or previous.get('model')
+        default_model = previous.get('model') or ('k-exaone_v2.5' if provider == 'exaone' else '')
+        model = input(f'Model ID [{default_model}]: ').strip() or default_model
         url = input(f'API URL [{previous.get("api_url") or default_url}]: ').strip().rstrip('/')
         url = url or previous.get('api_url') or default_url
         key_hint = '엔터: 직전 입력/기존 키 유지' if previous.get('api_key') else '필수'
@@ -367,6 +369,8 @@ def frontier_inference(existing, role):
                 validate_response(result, 'llm')
                 if result['choices'][0].get('finish_reason') != 'stop':
                     raise ValueError('Incomplete inference response')
+                if provider == 'exaone' and json.loads(result['choices'][0]['message']['content']) != {'ok': True}:
+                    raise ValueError('EXAONE did not return the requested JSON object')
         except (OSError, ValueError, TypeError, KeyError, IndexError, subprocess.TimeoutExpired) as error:
             detail = f'{type(error).__name__}: {error}'
             if isinstance(error, urllib.error.HTTPError):
@@ -399,7 +403,8 @@ def frontier_embedding(existing, role):
     """Validate a real 1024-dimensional BGE-M3 vector before saving credentials."""
     existing = dict(existing)
     while True:
-        model_choice(f'Mem0 embedding {role} provider', ('cloudflare',), 'cloudflare')
+        if model_choice(f'Mem0 embedding {role} provider', ('cloudflare', 'local'), 'cloudflare') == 'local':
+            return None
         match = re.search(r'/accounts/([0-9a-fA-F]{32})/', existing.get('api_url') or '')
         previous_account = match.group(1) if match else ''
         account = input(f'Cloudflare Account ID [{previous_account}]: ').strip() or previous_account
@@ -432,7 +437,7 @@ def frontier_embedding(existing, role):
                 print('TLS 인증서 문제입니다. 사내 CA와 OS 신뢰 저장소를 확인해주세요. 키의 유효성은 아직 확인되지 않았습니다.')
             else:
                 print('Account ID·API 토큰·Workers AI 권한을 확인해주세요.')
-            print('엔터로 직전 입력값을 유지합니다.')
+            print('엔터로 재시도하거나 local을 입력해 로컬 임베딩으로 전환합니다.')
             continue
         print('Cloudflare BGE-M3 인증 및 1024차원 검증이 완료되었습니다.')
         return connection
@@ -462,8 +467,9 @@ def mem0_model_settings(data):
         suffix = '_secondary' if role == 'secondary' else ''
         existing = embedding_connection(data, secondary=role == 'secondary')
         source = model_choice(f'Mem0 embedding {role} 모델 종류', ('local', 'frontier'), 'frontier')
-        if source == 'frontier':
-            for key, value in frontier_embedding(existing, role).items():
+        connection = frontier_embedding(existing, role) if source == 'frontier' else None
+        if connection is not None:
+            for key, value in connection.items():
                 data['embedding_' + key + suffix] = value
         else:
             data['embedding_api_url' + suffix] = mem0_api_url(

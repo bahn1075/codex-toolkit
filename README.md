@@ -180,12 +180,16 @@ VS Code 확장도 제거합니다. 이전 버전은 확장 소유권을 기록�
 
 `setup.sh`와 `setup.sh --resume`은 inference primary/secondary 각각에서
 `local` 또는 `frontier`를 먼저 선택받으며, Enter의 기본값은 항상 `frontier`입니다. Frontier는 `gemini`(기본),
-`anthropic`, `openai`, `groq`, `cloudflare` 중 공급자를 고르고 모델 ID, API URL, API 키를 입력합니다.
+`anthropic`, `openai`, `groq`, `cloudflare`, `exaone` 중 공급자를 고르고 모델 ID, API URL, API 키를 입력합니다.
 Groq의 기본 URL은 `https://api.groq.com/openai/v1/chat/completions`이며, 예를 들어
 `openai/gpt-oss-20b`를 선택할 수 있습니다. Cloudflare는 Workers AI 실행 권한이 있는
 API 토큰과 32자리 Account ID를 입력하면 해당 계정의 기본 URL을 만듭니다. 모델 ID는
 예를 들어 `@cf/openai/gpt-oss-20b`를 사용할 수 있습니다. 선택한 모델이 JSON schema 출력을
 지원해야 하며 사용 가능 여부는 공급자의 모델·계정 설정에 따라 다릅니다.
+EXAONE은 기본 모델 `k-exaone_v2.5`와 `https://api.exaone.ai/v1/chat/completions`를
+Enter로 선택하고 EXAONE API 키를 입력합니다. 항상 추론을 수행하므로 Mem0 요청에는
+`reasoning_effort=low`를 사용합니다. 설정 검증에서 JSON 출력을 확인하며,
+서비스 한도나 장애로 검증되지 않은 설정은 저장하지 않습니다.
 Gemini와 Anthropic은 공급자 고유 API로 요청하며 JSON schema 출력이 가능한 모델을
 사용해야 합니다. API 키는 붙여넣기 확인을 위해 입력 중 터미널에 표시하며,
 `~/.codex/mem0.json`(권한 600)에 저장합니다. 오류 메시지에서는 키를 가립니다.
@@ -207,6 +211,7 @@ Cloudflare 설정 검증은 OS의 CA 신뢰 설정을 사용하는 curl로 수�
 API 토큰은 curl 명령 인자 대신 표준 입력으로 전달합니다.
 토큰은 입력 중 화면에 표시하며 `~/.codex/mem0.json`(권한 600)에 저장합니다.
 Cloudflare 재설정 시 Account ID·토큰은 Enter로 유지하며, `local`로 바꾸면 해당 역할의 토큰을 제거합니다.
+Cloudflare 검증에 실패한 뒤 공급자 선택 화면에서도 `local`을 입력해 로컬 설정으로 전환할 수 있습니다.
 기존 URL만 저장된 설정은 계속 로컬로 처리하며, 설정을 다시 실행해 선택하기 전에는 변경하지 않습니다.
 로컬과 Cloudflare BGE-M3의 샘플 비교에서는 기존 벡터 검색이 가능했지만, 실행 구현이나
 모델 변경에 따라 근접한 검색 순위는 달라질 수 있습니다.

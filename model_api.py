@@ -145,7 +145,7 @@ def inference_connection(data, secondary=False):
 def resolve_inference(connection):
     if connection['provider'] == 'local':
         return select_model(connection['api_url'], 'llm')
-    if connection['provider'] not in ('openai', 'gemini', 'anthropic', 'groq', 'cloudflare'):
+    if connection['provider'] not in ('openai', 'gemini', 'anthropic', 'groq', 'cloudflare', 'exaone'):
         raise ValueError('Unsupported inference provider')
     if not connection.get('model') or not connection.get('api_key'):
         raise ValueError('Frontier model and API key are required')
@@ -172,11 +172,13 @@ def inference_request(connection, payload):
     base, model = resolve_inference(connection)
     provider = connection['provider']
     headers = {'Content-Type': 'application/json'}
-    if provider in ('local', 'openai', 'groq', 'cloudflare'):
+    if provider in ('local', 'openai', 'groq', 'cloudflare', 'exaone'):
         headers['Authorization'] = 'Bearer ' + (connection.get('api_key') or 'local-no-key')
         url = connection['api_url'] if provider == 'local' else base + '/chat/completions'
         if provider in ('groq', 'cloudflare') and payload.get('reasoning_effort') == 'none':
             payload = {key: value for key, value in payload.items() if key != 'reasoning_effort'}
+        if provider == 'exaone' and payload.get('reasoning_effort') not in ('low', 'high', 'max'):
+            payload = {**payload, 'reasoning_effort': 'low'}
         return url, headers, {**payload, 'model': model}
     if payload.get('tools') or payload.get('stream'):
         raise ValueError('Native inference supports non-streaming text and JSON extraction only')
@@ -214,7 +216,7 @@ def inference_request(connection, payload):
 
 def inference_response(provider, response):
     """Preserve truncation/refusal signals for the existing extraction guards."""
-    if provider in ('local', 'openai', 'groq', 'cloudflare'):
+    if provider in ('local', 'openai', 'groq', 'cloudflare', 'exaone'):
         return response
     if provider == 'gemini':
         candidate = response.get('candidates', [{}])[0]

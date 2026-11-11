@@ -24,6 +24,8 @@ status = 200
 primary_status = 200
 finish = 'STOP'
 fail_once = False
+exaone_bad_response = False
+exaone_status = 200
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -66,21 +68,27 @@ class Handler(BaseHTTPRequestHandler):
         if down and self.path.startswith('/gemini'):
             self.connection.close()
             return
-        self.send_response(primary_status if self.path.startswith(('/gemini', '/groq')) and primary_status != 200 else status)
+        self.send_response(exaone_status if self.path.startswith('/exaone') and exaone_status != 200
+                           else primary_status if self.path.startswith(('/gemini', '/groq')) and primary_status != 200
+                           else status)
         if status == 302:
             self.send_header('Location', base + '/groq/v1/chat/completions')
         self.end_headers()
         if self.path.startswith('/bge'):
             assert body['model'] == 'bge-m3'
             response = {'data': [{'embedding': [0.1] * 1024, 'index': 0}]}
-        elif self.path.startswith(('/openai', '/groq', '/cloudflare')):
-            expected = {'openai': 'openai-secret', 'groq': 'groq-secret', 'cloudflare': 'cloudflare-secret'}
+        elif self.path.startswith(('/openai', '/groq', '/cloudflare', '/exaone')):
+            expected = {'openai': 'openai-secret', 'groq': 'groq-secret', 'cloudflare': 'cloudflare-secret',
+                        'exaone': 'exaone-secret'}
             assert self.headers['Authorization'] == 'Bearer ' + expected[self.path.split('/')[1]]
             properties = body.get('response_format', {}).get('json_schema', {}).get('schema', {}).get('properties', {})
             content = {'tasks': [{'problem': '추론 공급자 변경 요청', 'actions': '설정 경로를 수정함',
                                   'result': '로컬 검사를 통과함'}]} if 'tasks' in properties else {'memory': []}
+            if 'ok' in properties:
+                content = {'ok': True}
             response = {'choices': [{'index': 0, 'message': {'role': 'assistant',
-                'content': json.dumps(content)}, 'finish_reason': 'stop'}]}
+                'content': 'not JSON' if self.path.startswith('/exaone') and exaone_bad_response
+                else json.dumps(content)}, 'finish_reason': 'stop'}]}
         elif self.path.startswith('/gemini'):
             properties = body['generationConfig'].get('responseJsonSchema', {}).get('properties', {})
             content = {'tasks': [{'problem': '추론 공급자 변경 요청', 'actions': '설정 경로를 수정함',
@@ -107,6 +115,35 @@ anthropic = {'provider': 'anthropic', 'api_url': base + '/anthropic/v1/messages'
 schema = {'type': 'object', 'properties': {'memory': {'type': 'array', 'items': {'type': 'string'}}},
           'required': ['memory'], 'additionalProperties': False}
 try:
+    # EXAONE setup and runtime must use its actual model, structured output, and supported reasoning setting.
+    with patch('builtins.input', side_effect=['exaone', '', base + '/exaone/v1', 'exaone-secret']), \
+            contextlib.redirect_stdout(io.StringIO()) as output:
+        exaone = configure.frontier_inference({}, 'primary')
+    assert exaone['model'] == 'k-exaone_v2.5'
+    assert hits[-1][0] == '/exaone/v1/chat/completions'
+    assert hits[-1][2]['reasoning_effort'] == 'low'
+    assert hits[-1][2]['response_format']['type'] == 'json_schema'
+    assert 'exaone-secret' not in output.getvalue()
+    with OpenAI(api_key='unused', base_url=base, max_retries=0,
+                http_client=DefaultHttpxClient(transport=mem0_mcp.ModelFailoverTransport(exaone, None, 'llm'))) as client:
+        result = client.chat.completions.create(model='placeholder',
+            messages=[{'role': 'user', 'content': 'hello'}], reasoning_effort='none',
+            response_format={'type': 'json_schema', 'json_schema': {'name': 'facts', 'schema': schema}})
+    assert result.choices[0].finish_reason == 'stop'
+    assert hits[-1][2]['model'] == 'k-exaone_v2.5' and hits[-1][2]['reasoning_effort'] == 'low'
+
+    # A provider that returns non-JSON must not pass setup as if Mem0 could use it.
+    exaone_bad_response = True
+    with patch('builtins.input', side_effect=['exaone', '', base + '/exaone/v1', 'exaone-secret', EOFError()]), \
+            contextlib.redirect_stdout(io.StringIO()):
+        try:
+            configure.frontier_inference({}, 'primary')
+        except EOFError:
+            pass
+        else:
+            raise AssertionError('Non-JSON output must not validate')
+    exaone_bad_response = False
+
     # An OS-trusted TLS chain rejected by Python can be checked by curl without exposing the key.
     with patch('builtins.input', side_effect=['groq', 'openai/gpt-oss-20b',
             base + '/groq/v1', 'groq-secret']), \
@@ -468,6 +505,34 @@ try:
                 assert hits[-1][1]['Authorization'] == 'Bearer cloudflare-secret'
             finally:
                 primary_status = 200
+                store.llm.client.close()
+                store.embedding_model.client.close()
+
+        # EXAONE settings are persisted and can fail over to another provider without sharing keys.
+        answers = ['frontier', 'exaone', '', base + '/exaone/v1', 'exaone-secret',
+                   'frontier', 'groq', 'openai/gpt-oss-20b', base + '/groq/v1', 'groq-secret',
+                   'local', 'local']
+        with patch.object(configure, 'MEM0_CONFIG', target), \
+                patch('builtins.input', side_effect=answers), \
+                patch.object(configure, 'mem0_api_url', side_effect=lambda p, e, pl, existing, **kw: existing), \
+                contextlib.redirect_stdout(io.StringIO()):
+            configure.llm_settings()
+        new_data = json.loads(target.read_text())
+        assert (new_data['inference_provider'], new_data['inference_provider_secondary']) == ('exaone', 'groq')
+        assert new_data['inference_model'] == 'k-exaone_v2.5'
+        assert target.stat().st_mode & 0o777 == 0o600
+        with patch.object(mem0_mcp, 'CONFIG', target), \
+                patch.object(mem0_mcp.Memory, 'from_config', side_effect=create_store):
+            store = mem0_mcp.memory()
+            try:
+                exaone_status = 503
+                before = len(hits)
+                assert mem0_mcp.extract_facts(store, []) == []
+                assert [hit[0] for hit in hits[before:]] == ['/exaone/v1/chat/completions', '/groq/v1/chat/completions']
+                assert hits[-2][1]['Authorization'] == 'Bearer exaone-secret'
+                assert hits[-1][1]['Authorization'] == 'Bearer groq-secret'
+            finally:
+                exaone_status = 200
                 store.llm.client.close()
                 store.embedding_model.client.close()
 
