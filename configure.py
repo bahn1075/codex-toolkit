@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Local config editing and read-only MCP protocol checks. Python 3.11–3.13 + tomlkit."""
 import json
+import io
 import os
 import pathlib
 import queue
 import re
 import shlex
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
@@ -329,8 +331,32 @@ def frontier_inference(existing, role):
             timeout = 10 if metadata_only else 300
             action = 'API 키·모델 정보 조회' if metadata_only else 'API 응답 생성 검증'
             print(f'{action} 중입니다. 응답을 최대 {timeout}초 기다립니다...', flush=True)
-            with urllib.request.build_opener(NoRedirect).open(request, timeout=timeout) as response:
-                result = json.load(response)
+            try:
+                with urllib.request.build_opener(NoRedirect).open(request, timeout=timeout) as response:
+                    result = json.load(response)
+            except urllib.error.URLError as error:
+                if not isinstance(error.reason, ssl.SSLCertVerificationError):
+                    raise
+                print('Python TLS 검증 실패: 운영체제 인증서를 사용하는 curl로 다시 검증합니다.')
+                config_lines = ['header = ' + json.dumps(f'{key}: {value}')
+                                for key, value in request.header_items()]
+                if not metadata_only:
+                    config_lines.append('data = ' + json.dumps(json.dumps(body)))
+                curl = subprocess.run([
+                    'curl', '--disable', '--silent', '--show-error', '--max-time', str(timeout),
+                    '--proto', '=http,https' if parsed.hostname in ('127.0.0.1', 'localhost', '::1') else '=https',
+                    '--request', 'GET' if metadata_only else 'POST', '--write-out', '\n%{http_code}',
+                    '--config', '-', target,
+                ], input='\n'.join(config_lines) + '\n', capture_output=True, text=True, timeout=timeout + 5)
+                if curl.returncode:
+                    raise ValueError(curl.stderr.strip() or 'curl request failed')
+                response_body, _, response_status = curl.stdout.rpartition('\n')
+                if not response_status.isdigit():
+                    raise ValueError('Invalid curl response status')
+                if int(response_status) >= 300:
+                    raise urllib.error.HTTPError(target, int(response_status), 'Request failed', {},
+                                                 io.BytesIO(response_body.encode()))
+                result = json.loads(response_body)
             if metadata_only:
                 if (not isinstance(result, dict) or not isinstance(result.get('name'), str)
                         or not result['name'].startswith('models/')
@@ -341,7 +367,7 @@ def frontier_inference(existing, role):
                 validate_response(result, 'llm')
                 if result['choices'][0].get('finish_reason') != 'stop':
                     raise ValueError('Incomplete inference response')
-        except (OSError, ValueError, TypeError, KeyError, IndexError) as error:
+        except (OSError, ValueError, TypeError, KeyError, IndexError, subprocess.TimeoutExpired) as error:
             detail = f'{type(error).__name__}: {error}'
             if isinstance(error, urllib.error.HTTPError):
                 detail = f'HTTP {error.code}: {error.reason}'
@@ -358,7 +384,7 @@ def frontier_inference(existing, role):
             detail = re.sub(r'AIza[0-9A-Za-z_-]+', '[REDACTED]', detail)
             detail = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', detail)[:800]
             print(f'API 검증 실패: {detail}')
-            if isinstance(error, TimeoutError) or isinstance(getattr(error, 'reason', None), TimeoutError):
+            if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)) or isinstance(getattr(error, 'reason', None), TimeoutError):
                 print('서버 응답 또는 네트워크 지연으로 검증을 마치지 못했습니다. 키의 유효성은 아직 확인되지 않았습니다.')
             else:
                 print('공급자·모델·URL·키를 확인해주세요.')

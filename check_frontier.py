@@ -2,6 +2,7 @@
 import contextlib
 import io
 import json
+import ssl
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -66,6 +67,8 @@ class Handler(BaseHTTPRequestHandler):
             self.connection.close()
             return
         self.send_response(primary_status if self.path.startswith(('/gemini', '/groq')) and primary_status != 200 else status)
+        if status == 302:
+            self.send_header('Location', base + '/groq/v1/chat/completions')
         self.end_headers()
         if self.path.startswith('/bge'):
             assert body['model'] == 'bge-m3'
@@ -104,6 +107,41 @@ anthropic = {'provider': 'anthropic', 'api_url': base + '/anthropic/v1/messages'
 schema = {'type': 'object', 'properties': {'memory': {'type': 'array', 'items': {'type': 'string'}}},
           'required': ['memory'], 'additionalProperties': False}
 try:
+    # An OS-trusted TLS chain rejected by Python can be checked by curl without exposing the key.
+    with patch('builtins.input', side_effect=['groq', 'openai/gpt-oss-20b',
+            base + '/groq/v1', 'groq-secret']), \
+            patch.object(configure.urllib.request.OpenerDirector, 'open',
+                         side_effect=configure.urllib.error.URLError(
+                             ssl.SSLCertVerificationError('CA constraints rejected'))), \
+            contextlib.redirect_stdout(io.StringIO()) as output:
+        connection = configure.frontier_inference({}, 'primary')
+    assert connection['provider'] == 'groq'
+    assert hits[-1][0] == '/groq/v1/chat/completions'
+    assert hits[-1][1]['Authorization'] == 'Bearer groq-secret'
+    assert hits[-1][2]['model'] == 'openai/gpt-oss-20b'
+    assert 'groq-secret' not in output.getvalue()
+
+    # curl must neither follow redirects nor turn HTTP errors into successful validation.
+    for failure_status in (302, 403):
+        status = failure_status
+        before = len(hits)
+        with patch('builtins.input', side_effect=['groq', 'openai/gpt-oss-20b',
+                base + '/groq/v1', 'groq-secret', EOFError('cancel')]), \
+                patch.object(configure.urllib.request.OpenerDirector, 'open',
+                             side_effect=configure.urllib.error.URLError(
+                                 ssl.SSLCertVerificationError('CA constraints rejected'))), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            try:
+                configure.frontier_inference({}, 'primary')
+            except EOFError:
+                pass
+            else:
+                raise AssertionError('Redirect or rejected authentication must not validate')
+        assert len(hits) == before + 1
+        assert f'HTTP {failure_status}' in output.getvalue()
+        assert 'groq-secret' not in output.getvalue()
+    status = 200
+
     # OpenAI-compatible providers must validate, preserve inputs and route actual requests.
     for provider, secret, model in (('groq', 'groq-secret', 'openai/gpt-oss-20b'),
                                     ('cloudflare', 'cloudflare-secret', '@cf/openai/gpt-oss-20b')):
