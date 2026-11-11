@@ -65,13 +65,14 @@ class Handler(BaseHTTPRequestHandler):
         if down and self.path.startswith('/gemini'):
             self.connection.close()
             return
-        self.send_response(primary_status if self.path.startswith('/gemini') and primary_status != 200 else status)
+        self.send_response(primary_status if self.path.startswith(('/gemini', '/groq')) and primary_status != 200 else status)
         self.end_headers()
         if self.path.startswith('/bge'):
             assert body['model'] == 'bge-m3'
             response = {'data': [{'embedding': [0.1] * 1024, 'index': 0}]}
-        elif self.path.startswith('/openai'):
-            assert self.headers['Authorization'] == 'Bearer openai-secret'
+        elif self.path.startswith(('/openai', '/groq', '/cloudflare')):
+            expected = {'openai': 'openai-secret', 'groq': 'groq-secret', 'cloudflare': 'cloudflare-secret'}
+            assert self.headers['Authorization'] == 'Bearer ' + expected[self.path.split('/')[1]]
             properties = body.get('response_format', {}).get('json_schema', {}).get('schema', {}).get('properties', {})
             content = {'tasks': [{'problem': '추론 공급자 변경 요청', 'actions': '설정 경로를 수정함',
                                   'result': '로컬 검사를 통과함'}]} if 'tasks' in properties else {'memory': []}
@@ -103,6 +104,51 @@ anthropic = {'provider': 'anthropic', 'api_url': base + '/anthropic/v1/messages'
 schema = {'type': 'object', 'properties': {'memory': {'type': 'array', 'items': {'type': 'string'}}},
           'required': ['memory'], 'additionalProperties': False}
 try:
+    # OpenAI-compatible providers must validate, preserve inputs and route actual requests.
+    for provider, secret, model in (('groq', 'groq-secret', 'openai/gpt-oss-20b'),
+                                    ('cloudflare', 'cloudflare-secret', '@cf/openai/gpt-oss-20b')):
+        answers = [provider]
+        if provider == 'cloudflare':
+            answers.append('a' * 32)
+        answers += [model, base + '/' + provider + '/v1', secret]
+        with patch('builtins.input', side_effect=answers), contextlib.redirect_stdout(io.StringIO()):
+            connection = configure.frontier_inference({}, 'primary')
+        assert connection == {'provider': provider, 'api_url': base + '/' + provider + '/v1',
+                              'model': model, 'api_key': secret}
+        assert hits[-1][0] == '/' + provider + '/v1/chat/completions'
+        assert hits[-1][2]['model'] == model
+        assert hits[-1][1]['User-Agent'] == 'codex-toolkit/1.0'
+        transport = mem0_mcp.ModelFailoverTransport(connection, None, 'llm')
+        with OpenAI(api_key='unused', base_url=base, max_retries=0,
+                    http_client=DefaultHttpxClient(transport=transport)) as client:
+            result = client.chat.completions.create(model='placeholder',
+                messages=[{'role': 'user', 'content': 'hello'}], reasoning_effort='none')
+        assert result.choices[0].finish_reason == 'stop'
+        assert 'reasoning_effort' not in hits[-1][2]
+
+    # Provider defaults, invalid Cloudflare IDs, and existing values are handled safely.
+    response = json.dumps({'choices': [{'message': {'content': '{"ok": true}'},
+                                         'finish_reason': 'stop'}]}).encode()
+    for provider, answers, expected in (
+        ('groq', ['groq', 'openai/gpt-oss-20b', '', 'groq-secret'],
+         'https://api.groq.com/openai/v1/chat/completions'),
+        ('cloudflare', ['cloudflare', 'bad-id', 'cloudflare', 'a' * 32,
+                        '@cf/openai/gpt-oss-20b', '', 'cloudflare-secret'],
+         'https://api.cloudflare.com/client/v4/accounts/' + 'a' * 32 + '/ai/v1/chat/completions')):
+        with patch('builtins.input', side_effect=answers), \
+                patch.object(configure.urllib.request.OpenerDirector, 'open',
+                             side_effect=lambda *a, **kw: io.BytesIO(response)), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            selected = configure.frontier_inference({}, 'primary')
+        assert selected['api_url'] == expected
+        assert selected['api_key'] not in output.getvalue()
+        if provider == 'cloudflare':
+            with patch('builtins.input', side_effect=['', '', '', '', '']), \
+                    patch.object(configure.urllib.request.OpenerDirector, 'open',
+                                 side_effect=lambda *a, **kw: io.BytesIO(response)), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                assert configure.frontier_inference(selected, 'secondary') == selected
+
     # A failed first attempt must explain the server error and retain unsaved inputs.
     auth_key = 'AQ.' + 'new-authorization-key-' * 16
     fail_once = True
@@ -358,6 +404,34 @@ try:
         assert target.read_bytes() == before
         assert 'gemini-secret' not in output.getvalue()
         status = 200
+
+        # Both providers persist independently and Mem0 fails over without sharing keys.
+        answers = ['frontier', 'groq', 'openai/gpt-oss-20b', base + '/groq/v1', 'groq-secret',
+                   'frontier', 'cloudflare', 'a' * 32, '@cf/openai/gpt-oss-20b',
+                   base + '/cloudflare/v1', 'cloudflare-secret', 'local', 'local']
+        with patch.object(configure, 'MEM0_CONFIG', target), \
+                patch('builtins.input', side_effect=answers), \
+                patch.object(configure, 'mem0_api_url', side_effect=lambda p, e, pl, existing, **kw: existing), \
+                contextlib.redirect_stdout(io.StringIO()):
+            configure.llm_settings()
+        new_data = json.loads(target.read_text())
+        assert (new_data['inference_provider'], new_data['inference_provider_secondary']) == ('groq', 'cloudflare')
+        assert (new_data['inference_api_key'], new_data['inference_api_key_secondary']) == ('groq-secret', 'cloudflare-secret')
+        assert target.stat().st_mode & 0o777 == 0o600
+        with patch.object(mem0_mcp, 'CONFIG', target), \
+                patch.object(mem0_mcp.Memory, 'from_config', side_effect=create_store):
+            store = mem0_mcp.memory()
+            try:
+                primary_status = 503
+                before = len(hits)
+                assert mem0_mcp.extract_facts(store, []) == []
+                assert [hit[0] for hit in hits[before:]] == ['/groq/v1/chat/completions', '/cloudflare/v1/chat/completions']
+                assert hits[-2][1]['Authorization'] == 'Bearer groq-secret'
+                assert hits[-1][1]['Authorization'] == 'Bearer cloudflare-secret'
+            finally:
+                primary_status = 200
+                store.llm.client.close()
+                store.embedding_model.client.close()
 
         # Returning both inference roles to local removes stale frontier credentials.
         with patch.object(configure, 'MEM0_CONFIG', target), \

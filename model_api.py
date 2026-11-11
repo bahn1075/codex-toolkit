@@ -145,7 +145,7 @@ def inference_connection(data, secondary=False):
 def resolve_inference(connection):
     if connection['provider'] == 'local':
         return select_model(connection['api_url'], 'llm')
-    if connection['provider'] not in ('openai', 'gemini', 'anthropic'):
+    if connection['provider'] not in ('openai', 'gemini', 'anthropic', 'groq', 'cloudflare'):
         raise ValueError('Unsupported inference provider')
     if not connection.get('model') or not connection.get('api_key'):
         raise ValueError('Frontier model and API key are required')
@@ -172,9 +172,11 @@ def inference_request(connection, payload):
     base, model = resolve_inference(connection)
     provider = connection['provider']
     headers = {'Content-Type': 'application/json'}
-    if provider in ('local', 'openai'):
+    if provider in ('local', 'openai', 'groq', 'cloudflare'):
         headers['Authorization'] = 'Bearer ' + (connection.get('api_key') or 'local-no-key')
         url = connection['api_url'] if provider == 'local' else base + '/chat/completions'
+        if provider in ('groq', 'cloudflare') and payload.get('reasoning_effort') == 'none':
+            payload = {key: value for key, value in payload.items() if key != 'reasoning_effort'}
         return url, headers, {**payload, 'model': model}
     if payload.get('tools') or payload.get('stream'):
         raise ValueError('Native inference supports non-streaming text and JSON extraction only')
@@ -212,7 +214,7 @@ def inference_request(connection, payload):
 
 def inference_response(provider, response):
     """Preserve truncation/refusal signals for the existing extraction guards."""
-    if provider in ('local', 'openai'):
+    if provider in ('local', 'openai', 'groq', 'cloudflare'):
         return response
     if provider == 'gemini':
         candidate = response.get('candidates', [{}])[0]

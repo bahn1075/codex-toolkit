@@ -277,14 +277,28 @@ def frontier_inference(existing, role):
     existing = dict(existing)
     defaults = {'gemini': 'https://generativelanguage.googleapis.com/v1beta',
                 'anthropic': 'https://api.anthropic.com/v1/messages',
-                'openai': 'https://api.openai.com/v1/chat/completions'}
+                'openai': 'https://api.openai.com/v1/chat/completions',
+                'groq': 'https://api.groq.com/openai/v1/chat/completions',
+                'cloudflare': ''}
+    match = re.search(r'/accounts/([0-9a-fA-F]{32})/', existing.get('api_url') or '')
+    account = match.group(1) if match else ''
     while True:
         provider = model_choice(f'Mem0 inference {role} provider', tuple(defaults),
                                 existing.get('provider') if existing.get('provider') in defaults else 'gemini')
         previous = existing if existing.get('provider') == provider else {}
+        default_url = defaults[provider]
+        if provider == 'cloudflare':
+            entered_account = input(f'Cloudflare Account ID [{account}]: ').strip() or account
+            if not re.fullmatch(r'[0-9a-fA-F]{32}', entered_account):
+                print('32자리 Cloudflare Account ID를 입력해주세요.')
+                continue
+            if entered_account != account:
+                previous = {key: value for key, value in previous.items() if key != 'api_url'}
+            account = entered_account
+            default_url = f'https://api.cloudflare.com/client/v4/accounts/{account}/ai/v1/chat/completions'
         model = input(f'Model ID [{previous.get("model") or ""}]: ').strip() or previous.get('model')
-        url = input(f'API URL [{previous.get("api_url") or defaults[provider]}]: ').strip().rstrip('/')
-        url = url or previous.get('api_url') or defaults[provider]
+        url = input(f'API URL [{previous.get("api_url") or default_url}]: ').strip().rstrip('/')
+        url = url or previous.get('api_url') or default_url
         key_hint = '엔터: 직전 입력/기존 키 유지' if previous.get('api_key') else '필수'
         secret = input(f'API key (화면에 표시됩니다; {key_hint}): ').strip() or previous.get('api_key')
         connection = {'provider': provider, 'api_url': url, 'model': model, 'api_key': secret}
@@ -306,7 +320,7 @@ def frontier_inference(existing, role):
             metadata_only = provider == 'gemini'
             if metadata_only:
                 target = target.removesuffix(':generateContent')
-            request = urllib.request.Request(target, headers=headers,
+            request = urllib.request.Request(target, headers={**headers, 'User-Agent': 'codex-toolkit/1.0'},
                 data=None if metadata_only else json.dumps(body).encode())
             # Reject redirects: never forward a provider API key to another host.
             class NoRedirect(urllib.request.HTTPRedirectHandler):

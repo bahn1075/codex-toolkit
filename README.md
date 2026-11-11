@@ -180,7 +180,12 @@ VS Code 확장도 제거합니다. 이전 버전은 확장 소유권을 기록�
 
 `setup.sh`와 `setup.sh --resume`은 inference primary/secondary 각각에서
 `local` 또는 `frontier`를 먼저 선택받으며, Enter의 기본값은 항상 `frontier`입니다. Frontier는 `gemini`(기본),
-`anthropic`, `openai` 중 공급자를 고르고 모델 ID, API URL, API 키를 입력합니다.
+`anthropic`, `openai`, `groq`, `cloudflare` 중 공급자를 고르고 모델 ID, API URL, API 키를 입력합니다.
+Groq의 기본 URL은 `https://api.groq.com/openai/v1/chat/completions`이며, 예를 들어
+`openai/gpt-oss-20b`를 선택할 수 있습니다. Cloudflare는 Workers AI 실행 권한이 있는
+API 토큰과 32자리 Account ID를 입력하면 해당 계정의 기본 URL을 만듭니다. 모델 ID는
+예를 들어 `@cf/openai/gpt-oss-20b`를 사용할 수 있습니다. 선택한 모델이 JSON schema 출력을
+지원해야 하며 사용 가능 여부는 공급자의 모델·계정 설정에 따라 다릅니다.
 Gemini와 Anthropic은 공급자 고유 API로 요청하며 JSON schema 출력이 가능한 모델을
 사용해야 합니다. API 키는 붙여넣기 확인을 위해 입력 중 터미널에 표시하며,
 `~/.codex/mem0.json`(권한 600)에 저장합니다. 오류 메시지에서는 키를 가립니다.
