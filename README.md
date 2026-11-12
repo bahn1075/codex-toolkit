@@ -198,7 +198,9 @@ API 토큰과 32자리 Account ID를 입력하면 해당 계정의 기본 URL을
 지원해야 하며 사용 가능 여부는 공급자의 모델·계정 설정에 따라 다릅니다.
 EXAONE은 기본 모델 `k-exaone_v2.5`와 `https://api.exaone.ai/v1/chat/completions`를
 Enter로 선택하고 EXAONE API 키를 입력합니다. 항상 추론을 수행하므로 Mem0 요청에는
-`reasoning_effort=low`를 사용합니다. 설정 검증에서 JSON 출력을 확인하며,
+`reasoning_effort=low`를 사용합니다. 설정 시 모델 목록으로 키 인증과 모델 존재 여부를
+확인하며, 실제 답변 생성과 JSON 출력은 검증하지 않습니다. 서비스가 혼잡하면 실제 Mem0
+요청은 실패하거나 설정된 보조 모델로 전환될 수 있습니다.
 Frontier 추론·임베딩 설정 검증에서 HTTP 429(사용량 제한)가 발생하면 검증을 건너뛰고 입력값을 그대로 저장합니다.
 이 경우 키·모델·임베딩 차원의 유효성은 확인되지 않았으며, 다른 오류는 기존처럼 재입력받습니다.
 Gemini와 Anthropic은 공급자 고유 API로 요청하며 JSON schema 출력이 가능한 모델을

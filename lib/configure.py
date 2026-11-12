@@ -321,9 +321,11 @@ def frontier_inference(existing, role):
                     'name': 'connection_test', 'schema': {
                         'type': 'object', 'properties': {'ok': {'type': 'boolean'}},
                         'required': ['ok'], 'additionalProperties': False}}}})
-            metadata_only = provider == 'gemini'
-            if metadata_only:
+            metadata_only = provider in ('gemini', 'exaone')
+            if provider == 'gemini':
                 target = target.removesuffix(':generateContent')
+            elif provider == 'exaone':
+                target = target.removesuffix('/chat/completions') + '/models'
             request = urllib.request.Request(target, headers={**headers, 'User-Agent': 'codex-toolkit/1.0'},
                 data=None if metadata_only else json.dumps(body).encode())
             # Reject redirects: never forward a provider API key to another host.
@@ -359,18 +361,20 @@ def frontier_inference(existing, role):
                     raise urllib.error.HTTPError(target, int(response_status), 'Request failed', {},
                                                  io.BytesIO(response_body.encode()))
                 result = json.loads(response_body)
-            if metadata_only:
+            if provider == 'gemini':
                 if (not isinstance(result, dict) or not isinstance(result.get('name'), str)
                         or not result['name'].startswith('models/')
                         or 'generateContent' not in result.get('supportedGenerationMethods', [])):
                     raise ValueError('The selected model does not report generateContent support')
+            elif provider == 'exaone':
+                if (not isinstance(result, dict) or not isinstance(result.get('data'), list)
+                        or not any(isinstance(item, dict) and item.get('id') == model for item in result['data'])):
+                    raise ValueError('The selected EXAONE model is not available in the model list')
             else:
                 result = inference_response(provider, result)
                 validate_response(result, 'llm')
                 if result['choices'][0].get('finish_reason') != 'stop':
                     raise ValueError('Incomplete inference response')
-                if provider == 'exaone' and json.loads(result['choices'][0]['message']['content']) != {'ok': True}:
-                    raise ValueError('EXAONE did not return the requested JSON object')
         except (OSError, ValueError, TypeError, KeyError, IndexError, subprocess.TimeoutExpired) as error:
             if isinstance(error, urllib.error.HTTPError) and error.code == 429:
                 print('HTTP 429: 사용량 제한으로 검증을 건너뛰고 입력값을 유지합니다. 설정 저장을 계속합니다.')
@@ -397,8 +401,11 @@ def frontier_inference(existing, role):
                 print('공급자·모델·URL·키를 확인해주세요.')
             print('엔터로 직전 입력값을 유지하여 다시 검증할 수 있습니다.')
             continue
-        print('Gemini 키 인증 및 모델 정보 조회가 완료되었습니다.' if provider == 'gemini'
-              else '프론티어 API 검증이 완료되었습니다.')
+        if provider == 'exaone':
+            print('EXAONE 키 인증 및 모델 목록 조회가 완료되었습니다. 실제 답변 생성과 JSON 출력은 검증하지 않았습니다.')
+        else:
+            print('Gemini 키 인증 및 모델 정보 조회가 완료되었습니다.' if provider == 'gemini'
+                  else '프론티어 API 검증이 완료되었습니다.')
         return connection
 
 

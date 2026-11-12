@@ -27,10 +27,19 @@ finish = 'STOP'
 fail_once = False
 exaone_bad_response = False
 exaone_status = 200
+exaone_metadata_status = 200
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         global fail_once
+        if self.path == '/exaone/v1/models':
+            hits.append((self.path, dict(self.headers), None))
+            assert self.headers['Authorization'] == 'Bearer exaone-secret'
+            self.send_response(exaone_metadata_status)
+            self.end_headers()
+            self.wfile.write(json.dumps({'data': [] if exaone_bad_response else [
+                {'id': 'k-exaone_v2.5'}]}).encode())
+            return
         if self.path.startswith('/gemini/v1beta/models/'):
             hits.append((self.path, dict(self.headers), None))
             self.send_response(403 if fail_once else status)
@@ -116,15 +125,42 @@ anthropic = {'provider': 'anthropic', 'api_url': base + '/anthropic/v1/messages'
 schema = {'type': 'object', 'properties': {'memory': {'type': 'array', 'items': {'type': 'string'}}},
           'required': ['memory'], 'additionalProperties': False}
 try:
-    # EXAONE setup and runtime must use its actual model, structured output, and supported reasoning setting.
+    # Setup must authenticate and confirm model availability without using the busy generation endpoint.
+    exaone_status = 429
     with patch('builtins.input', side_effect=['exaone', '', base + '/exaone/v1', 'exaone-secret']), \
             contextlib.redirect_stdout(io.StringIO()) as output:
         exaone = configure.frontier_inference({}, 'primary')
     assert exaone['model'] == 'k-exaone_v2.5'
-    assert hits[-1][0] == '/exaone/v1/chat/completions'
-    assert hits[-1][2]['reasoning_effort'] == 'low'
-    assert hits[-1][2]['response_format']['type'] == 'json_schema'
+    assert hits[-1][0] == '/exaone/v1/models' and hits[-1][2] is None
+    assert '답변 생성' in output.getvalue() and '검증하지' in output.getvalue()
     assert 'exaone-secret' not in output.getvalue()
+    exaone_status = 200
+    # The same authenticated model lookup must work with the verified TLS fallback.
+    with patch('builtins.input', side_effect=['exaone', '', base + '/exaone/v1', 'exaone-secret']), \
+            patch.object(configure.urllib.request.OpenerDirector, 'open',
+                         side_effect=configure.urllib.error.URLError(
+                             ssl.SSLCertVerificationError('CA constraints rejected'))), \
+            contextlib.redirect_stdout(io.StringIO()):
+        assert configure.frontier_inference({}, 'primary')['model'] == 'k-exaone_v2.5'
+    assert hits[-1][0] == '/exaone/v1/models' and hits[-1][2] is None
+
+    # Authentication errors remain failures, while metadata rate limits preserve the existing skip behavior.
+    exaone_metadata_status = 401
+    with patch('builtins.input', side_effect=['exaone', '', base + '/exaone/v1', 'exaone-secret', EOFError()]), \
+            contextlib.redirect_stdout(io.StringIO()) as output:
+        try:
+            configure.frontier_inference({}, 'primary')
+        except EOFError:
+            pass
+        else:
+            raise AssertionError('Rejected authentication must not validate')
+    assert 'HTTP 401' in output.getvalue() and 'exaone-secret' not in output.getvalue()
+    exaone_metadata_status = 429
+    with patch('builtins.input', side_effect=['exaone', '', base + '/exaone/v1', 'exaone-secret']), \
+            contextlib.redirect_stdout(io.StringIO()) as output:
+        assert configure.frontier_inference({}, 'primary')['model'] == 'k-exaone_v2.5'
+    assert '429' in output.getvalue() and 'exaone-secret' not in output.getvalue()
+    exaone_metadata_status = 200
     with OpenAI(api_key='unused', base_url=base, max_retries=0,
                 http_client=DefaultHttpxClient(transport=mem0_mcp.ModelFailoverTransport(exaone, None, 'llm'))) as client:
         result = client.chat.completions.create(model='placeholder',
@@ -133,7 +169,7 @@ try:
     assert result.choices[0].finish_reason == 'stop'
     assert hits[-1][2]['model'] == 'k-exaone_v2.5' and hits[-1][2]['reasoning_effort'] == 'low'
 
-    # A provider that returns non-JSON must not pass setup as if Mem0 could use it.
+    # A missing model must not pass configuration validation.
     exaone_bad_response = True
     with patch('builtins.input', side_effect=['exaone', '', base + '/exaone/v1', 'exaone-secret', EOFError()]), \
             contextlib.redirect_stdout(io.StringIO()):
