@@ -66,6 +66,19 @@ def complete_end(path, include_valid_tail=False):
     return 0
 
 
+def transcript_hash(path, end):
+    """Fingerprint a queued byte range without parsing or retaining the transcript."""
+    digest = hashlib.sha256()
+    with path.open('rb') as source:
+        while end:
+            chunk = source.read(min(end, 1024 * 1024))
+            if not chunk:
+                return None
+            digest.update(chunk)
+            end -= len(chunk)
+    return digest.hexdigest()
+
+
 def enqueue(event):
     if event.get('hook_event_name') not in ('SessionStart', 'Stop', 'SessionEnd'):
         raise ValueError('Expected SessionStart, Stop or SessionEnd')
@@ -84,7 +97,11 @@ def enqueue(event):
             raise ValueError('Transcript contains no complete records')
         job = STATE / f'{session}-{end:020d}.job.json'
         if not job.exists():
-            write_json(job, {'session': session, 'path': str(path), 'end': end})
+            snapshot_hash = transcript_hash(path, end)
+            if snapshot_hash is None:
+                raise ValueError('Transcript changed while enqueueing; retry after the next Stop or SessionEnd')
+            write_json(job, {'session': session, 'path': str(path), 'end': end,
+                             'sha256': snapshot_hash})
     if not any(STATE.glob('*.job.json')):
         return
     # No Mem0 imports or network I/O in the three-second hook window.
@@ -115,11 +132,12 @@ def evidence(text):
             except (ValueError, TypeError):
                 return redact(value)
             if isinstance(decoded, (dict, list, str)):
-                return json.dumps(clean(decoded), ensure_ascii=False)
+                return json.dumps(clean(decoded), ensure_ascii=False, sort_keys=True)
             return redact(value)
         return value
     value = clean(text)
-    return redact(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str))
+    return redact(value if isinstance(value, str) else json.dumps(
+        value, ensure_ascii=False, sort_keys=True, default=str))
 
 
 def task_message(record):
@@ -230,16 +248,20 @@ def extract_task_memories(store, messages, previous=None, progress_path=None):
     if previous_problem:
         previous_problem = excerpt(previous_problem)
     source_hash = hashlib.sha256(json.dumps(
-        [messages, previous_problem, 2], ensure_ascii=False).encode()).hexdigest()
-    progress = {'version': 2, 'source_hash': source_hash, 'consumed': 0,
+        [messages, previous_problem, 3], ensure_ascii=False).encode()).hexdigest()
+    progress = {'version': 3, 'source_hash': source_hash, 'consumed': 0,
                 'chunk_size': MAX_TEXT, 'facts': []}
     if progress_path is not None and progress_path.exists():
         saved = json.loads(progress_path.read_text())
         # Old summaries cannot supply missing detail; re-read their uncommitted source.
-        if saved.get('version') == 2:
+        if saved.get('version') == 3:
             if saved['source_hash'] != source_hash:
                 raise ValueError('Extraction source changed; checkpoint retained')
             progress = saved
+        elif saved.get('version') == 2:
+            # Canonical tool JSON changes character offsets: preserve the cache and replay its source.
+            progress_path.replace(progress_path.with_name(
+                progress_path.name + f'.{uuid.uuid4().hex}.v2-backup'))
     total = sum(len(message['content']) for message in messages)
     if len(json.dumps({'previous_task': previous_problem, 'events': messages},
                       ensure_ascii=False)) <= MAX_TEXT and progress['consumed'] == 0:
@@ -293,30 +315,70 @@ def extract_task_memories(store, messages, previous=None, progress_path=None):
     return progress['facts']
 
 
-def batches(path, session, checkpoint, end, include_valid_tail=False):
-    """Yield each user request with its observed work once a new request or final arrives."""
+def transcript_prefix(path, session, checkpoint):
+    """Relocate rewritten bytes only when the entire stored evidence prefix still matches."""
     offset = checkpoint.get('offset', 0)
+    rewritten = bool(offset and transcript_hash(path, offset) != checkpoint['sha256'])
     digest = hashlib.sha256()
+    evidence_digest = hashlib.sha256()
+    count = 0
+
+    def advance(raw):
+        nonlocal count
+        digest.update(raw)
+        message = task_message(json.loads(raw))
+        if message:
+            evidence_digest.update(json.dumps(message, sort_keys=True,
+                ensure_ascii=False, separators=(',', ':')).encode() + b'\n')
+            count += 1
+
     with path.open('rb') as transcript:
         meta = json.loads(transcript.readline())
         if meta.get('type') != 'session_meta' or (
                 meta['payload'].get('session_id') or meta['payload'].get('id')) != session:
             raise ValueError('Transcript session identity mismatch')
         transcript.seek(0)
-        remaining = offset
-        while remaining:
-            chunk = transcript.read(min(remaining, 1024 * 1024))
-            if not chunk:
-                raise ValueError('Transcript was truncated; checkpoint retained')
-            digest.update(chunk)
-            remaining -= len(chunk)
-        if offset and digest.hexdigest() != checkpoint['sha256']:
-            raise ValueError('Transcript prefix changed; checkpoint retained')
+        if rewritten:
+            target = checkpoint.get('evidence_count', 0)
+            if not target:
+                raise ValueError('Transcript prefix changed; checkpoint retained')
+            transcript.seek(0)
+            digest = hashlib.sha256()
+            evidence_digest = hashlib.sha256()
+            count = 0
+            while count < target:
+                raw = transcript.readline()
+                if not raw:
+                    raise ValueError('Transcript was truncated; checkpoint retained')
+                advance(raw)
+            if evidence_digest.hexdigest() != checkpoint.get('evidence_sha256'):
+                raise ValueError('Transcript evidence changed; checkpoint retained')
+        else:
+            while transcript.tell() < offset:
+                raw = transcript.readline()
+                if not raw:
+                    raise ValueError('Transcript was truncated; checkpoint retained')
+                advance(raw)
+        cursor = {**checkpoint, 'offset': transcript.tell(), 'sha256': digest.hexdigest(),
+                  'evidence_count': count, 'evidence_sha256': evidence_digest.hexdigest()}
+    return cursor, digest, evidence_digest, rewritten
+
+
+def batches(path, session, checkpoint, end, include_valid_tail=False):
+    """Yield each user request with its observed work once a new request or final arrives."""
+    checkpoint, digest, evidence_digest, rewritten = transcript_prefix(path, session, checkpoint)
+    offset = checkpoint['offset']
+    count = checkpoint['evidence_count']
+    if rewritten:
+        end = complete_end(path, include_valid_tail)
+    with path.open('rb') as transcript:
+        transcript.seek(offset)
         messages = []
         seen_tools = set()
         start_offset = offset
         while transcript.tell() < end:
-            before = {'offset': transcript.tell(), 'sha256': digest.hexdigest()}
+            before = {'offset': transcript.tell(), 'sha256': digest.hexdigest(),
+                      'evidence_count': count, 'evidence_sha256': evidence_digest.hexdigest()}
             raw = transcript.readline()
             if not raw or transcript.tell() > end or (
                     not raw.endswith(b'\n') and not (include_valid_tail and transcript.tell() == end)):
@@ -324,6 +386,10 @@ def batches(path, session, checkpoint, end, include_valid_tail=False):
             record = json.loads(raw)
             digest.update(raw)
             message = task_message(record)
+            if message:
+                evidence_digest.update(json.dumps(message, sort_keys=True,
+                    ensure_ascii=False, separators=(',', ':')).encode() + b'\n')
+                count += 1
             if message and message['content'].strip():
                 if message['role'] == 'user' and messages:
                     if any(part['role'] == 'user' for part in messages):
@@ -342,6 +408,8 @@ def batches(path, session, checkpoint, end, include_valid_tail=False):
                 if message['role'] == 'final':
                     if any(part['role'] == 'user' for part in messages):
                         yield messages, {'offset': transcript.tell(), 'sha256': digest.hexdigest(),
+                                         'evidence_count': count,
+                                         'evidence_sha256': evidence_digest.hexdigest(),
                                          'start_offset': start_offset}
                     messages = []
                     seen_tools = set()
@@ -358,14 +426,30 @@ def process_job(job_path, store_factory=None, user_id='codex', state_dir=None, m
     cursor = json.loads(cursor_path.read_text()) if cursor_path.exists() else {}
     pending_path = state_dir / f'{session}.pending.json'
     progress_path = state_dir / f'{session}.summary.json'
-    if pending_path.exists() and cursor:
-        committed = f'{session}:{cursor["offset"]}:{cursor["sha256"]}'
-        if json.loads(pending_path.read_text())['batch'] == committed:
-            pending_path.unlink()
-            progress_path.unlink(missing_ok=True)
     path = Path(job['path'])
     if not path.exists():
         path = HOME / 'archived_sessions' / path.name
+    cursor, _, _, rewritten = transcript_prefix(path, session, cursor)
+    if rewritten or (job.get('sha256') and transcript_hash(path, job['end']) != job['sha256']):
+        # Refresh captured jobs first: a crash leaves the old cursor able to retry this repair.
+        queued = {queued: json.loads(queued.read_text())
+                  for queued in {job_path, *state_dir.glob(f'{session}-*.job.json')}}
+        for queued_path, queued_job in queued.items():
+            if queued_job.get('session') != session:
+                raise ValueError('Queued session identity mismatch')
+            queued_job['end'] = complete_end(path, queued_job.get('include_valid_tail', False))
+            queued_job['sha256'] = transcript_hash(path, queued_job['end'])
+            if queued_job['sha256'] is None:
+                raise ValueError('Transcript changed during queue repair; checkpoint retained')
+            write_json(queued_path, queued_job)
+        job = queued[job_path]
+    if cursor_path.exists():
+        write_json(cursor_path, cursor)
+    if pending_path.exists() and cursor.get('offset'):
+        committed = cursor.get('batch_id', f'{session}:{cursor["offset"]}:{cursor["sha256"]}')
+        if json.loads(pending_path.read_text())['batch'] == committed:
+            pending_path.unlink()
+            progress_path.unlink(missing_ok=True)
     if job['end'] <= cursor.get('offset', 0):
         job_path.unlink()
         return stats
@@ -377,11 +461,13 @@ def process_job(job_path, store_factory=None, user_id='codex', state_dir=None, m
             if store is None:
                 store = (store_factory or memory)()
             # Persist extracted facts before inserts so retries never re-extract this batch.
-            batch_id = f'{session}:{next_cursor["offset"]}:{next_cursor["sha256"]}'
+            batch_id = f'{session}:{next_cursor["evidence_count"]}:{next_cursor["evidence_sha256"]}'
             if pending_path.exists():
                 pending = json.loads(pending_path.read_text())
-                if pending['batch'] != batch_id:
+                legacy_batch = f'{session}:{next_cursor["offset"]}:{next_cursor["sha256"]}'
+                if pending['batch'] not in (batch_id, legacy_batch):
                     raise ValueError('Pending batch mismatch; refusing to skip unsaved facts')
+                batch_id = pending['batch']
             else:
                 pending = {'batch': batch_id, 'facts': [
                     {**fact, 'text': redact(fact['text'])}
@@ -417,6 +503,7 @@ def process_job(job_path, store_factory=None, user_id='codex', state_dir=None, m
                 last_task = {'id': rows[0]['id'], 'key': key, 'text': rows[0]['memory'],
                              'request': next(message['content'] for message in messages
                                              if message['role'] == 'user')}
+            next_cursor['batch_id'] = batch_id
             next_cursor['last_task'] = last_task
             write_json(cursor_path, next_cursor)
             pending_path.unlink()

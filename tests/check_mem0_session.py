@@ -2,6 +2,7 @@
 from _paths import ROOT
 import contextlib
 import io
+import hashlib
 import json
 import fcntl
 from pathlib import Path
@@ -167,6 +168,7 @@ with tempfile.TemporaryDirectory() as tmp:
         queued = json.loads(job.read_text())
         assert queued['end'] == transcript.stat().st_size - 1
         queued['end'] = transcript.stat().st_size
+        queued['sha256'] = hashlib.sha256(transcript.read_bytes()).hexdigest()
         s.write_json(job, queued)  # Exercise worker refusal of a malformed snapshot too.
         old_cursor = (state / f'{session}.cursor.json').read_bytes()
         try:

@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import uuid
 import httpx
 from openai import BadRequestError
@@ -296,6 +296,212 @@ class SemanticChunks(unittest.TestCase):
             self.assertTrue(all(item['codex_first_offset'] > 0 for item in metadata))
             cursor = json.loads((root / f'{session}.cursor.json').read_text())
             self.assertEqual(cursor['last_task']['request'], 'route.md 표를 보완해줘')
+
+
+class TranscriptRewrites(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.path = self.root / 'sessions/transcript.jsonl'
+        self.path.parent.mkdir()
+        self.session = str(uuid.uuid4())
+        self.events = [
+            {'type': 'session_meta', 'payload': {'id': self.session, 'note': 'x' * 2000}},
+            {'type': 'event_msg', 'payload': {'type': 'user_message', 'message': '첫 요청'}},
+            {'type': 'response_item', 'payload': {'type': 'function_call_output',
+                'call_id': 'read-1', 'output': '확인한 근거'}},
+            {'type': 'event_msg', 'payload': {'type': 'agent_message', 'phase': 'final_answer',
+                'message': '첫 결과'}},
+        ]
+        self.write()
+        self.store = Store(lambda **kwargs: reply('첫 기록'))
+        self.job = self.queue(self.path.stat().st_size)
+        self.run_job(self.job)
+        self.cursor_path = self.root / f'{self.session}.cursor.json'
+
+    def write(self, compact=False):
+        separators = (',', ':') if compact else None
+        self.path.write_text(''.join(json.dumps(event, ensure_ascii=False, sort_keys=compact,
+            separators=separators) + '\n' for event in self.events))
+
+    def queue(self, end):
+        job = self.root / f'{self.session}-{end:020d}.job.json'
+        if end == self.path.stat().st_size:
+            with patch.object(s, 'STATE', self.root), patch.object(s, 'HOME', self.root), \
+                    patch.object(s.subprocess, 'Popen'):
+                s.enqueue({'hook_event_name': 'Stop', 'session_id': self.session,
+                           'transcript_path': str(self.path)})
+        else:
+            s.write_json(job, {'session': self.session, 'path': str(self.path), 'end': end})
+        return job
+
+    def run_job(self, job):
+        return s.process_job(job, lambda: self.store, state_dir=self.root)
+
+    def append_turn(self):
+        self.events.extend([
+            {'type': 'event_msg', 'payload': {'type': 'user_message', 'message': '다음 요청'}},
+            {'type': 'event_msg', 'payload': {'type': 'agent_message', 'phase': 'final_answer',
+                'message': '다음 결과'}},
+        ])
+
+    def test_reserialization_relocates_cursor_and_refreshes_all_stale_jobs(self):
+        old_end = self.path.stat().st_size
+        first, second = self.queue(old_end + 100), self.queue(old_end + 300)
+        other = self.root / f'{uuid.uuid4()}-00000000000000000001.job.json'
+        other.write_text('{}')
+        self.events[0]['payload']['note'] = 'new metadata'
+        self.append_turn()
+        self.write(compact=True)
+        self.assertLess(self.path.stat().st_size, old_end)
+        self.run_job(first)
+        self.assertEqual(len(self.store.inserts), 2)
+        self.assertEqual(json.loads(self.cursor_path.read_text())['last_task']['request'], '다음 요청')
+        self.assertEqual(json.loads(second.read_text())['end'], self.path.stat().st_size)
+        self.run_job(second)
+        self.assertEqual(len(self.store.inserts), 2)
+        self.assertTrue(other.exists())
+
+    def test_expanded_serialization_keeps_the_first_unstored_turn(self):
+        self.events[0]['payload']['note'] = 'metadata expanded' * 400
+        self.append_turn()
+        self.write()
+        self.run_job(self.queue(self.path.stat().st_size))
+        self.assertEqual(len(self.store.inserts), 2)
+        self.assertEqual(json.loads(self.cursor_path.read_text())['last_task']['request'], '다음 요청')
+
+    def test_structured_tool_evidence_survives_json_object_key_reordering(self):
+        self.events[2]['payload']['output'] = {'z': {'second': 2, 'first': 1}, 'a': 0}
+        self.write()
+        self.cursor_path.unlink()
+        self.store = Store(lambda **kwargs: reply('구조화된 근거'))
+        self.run_job(self.queue(self.path.stat().st_size))
+        self.append_turn()
+        self.write(compact=True)
+        self.run_job(self.queue(self.path.stat().st_size))
+        self.assertEqual(len(self.store.inserts), 2)
+        self.assertEqual(json.loads(self.cursor_path.read_text())['last_task']['request'], '다음 요청')
+
+    def test_legacy_extraction_cache_is_backed_up_before_canonical_replay(self):
+        progress = self.root / 'request.summary.json'
+        saved = {'version': 2, 'source_hash': 'legacy-order', 'consumed': 6000,
+                 'chunk_size': 6000, 'facts': [{'text': '이전 순서의 캐시'}]}
+        s.write_json(progress, saved)
+        source = '검증할 원본 ' * 2000
+        records = s.extract_task_memories(self.store, [{'role': 'user', 'content': source}],
+                                          progress_path=progress)
+        backups = list(self.root.glob('request.summary.json*.v2-backup'))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(json.loads(backups[0].read_text()), saved)
+        current = json.loads(progress.read_text())
+        self.assertEqual(current['consumed'], len(source))
+        self.assertEqual(current['version'], 3)
+        self.assertNotIn('이전 순서의 캐시', [record['text'] for record in records])
+
+    def test_suffix_only_expansion_does_not_drop_an_unstored_turn(self):
+        self.append_turn()
+        self.write()
+        job = self.queue(self.path.stat().st_size)
+        self.events[-2]['timestamp'] = 'x' * 1000
+        self.write()
+        self.run_job(job)
+        self.assertFalse(job.exists())
+        self.assertEqual(len(self.store.inserts), 2)
+        self.assertEqual(json.loads(self.cursor_path.read_text())['last_task']['request'], '다음 요청')
+
+    def test_shortened_rewrite_ignores_a_partial_tail_after_complete_new_turns(self):
+        self.events[0]['payload']['note'] = ''
+        self.append_turn()
+        self.write(compact=True)
+        job = self.queue(self.path.stat().st_size)
+        with self.path.open('ab') as out:
+            out.write(b'{"type":')
+        self.run_job(job)
+        self.assertEqual(len(self.store.inserts), 2)
+        self.assertFalse(job.exists())
+        self.assertEqual(json.loads(self.cursor_path.read_text())['last_task']['request'], '다음 요청')
+
+    def test_suffix_only_shrink_does_not_leave_an_oversized_job_retrying_at_eof(self):
+        self.append_turn()
+        self.events[-2]['timestamp'] = 'x' * 1000
+        self.write()
+        job = self.queue(self.path.stat().st_size)
+        self.events[-2].pop('timestamp')
+        self.write()
+        self.run_job(job)
+        self.assertFalse(job.exists())
+        self.assertEqual(len(self.store.inserts), 2)
+
+    def test_first_batch_rewrite_after_commit_reuses_pending_facts_without_a_cursor(self):
+        self.cursor_path.unlink()
+        self.store = Store(lambda **kwargs: reply('첫 기록', '둘째 기록'))
+        self.store.lose_ack = True
+        job = self.queue(self.path.stat().st_size)
+        with self.assertRaises(ConnectionError):
+            self.run_job(job)
+        self.events[1]['timestamp'] = 'x' * 1000
+        self.write()
+        self.store.lose_ack = False
+        self.run_job(job)
+        self.assertEqual(len(self.store.inserts), 2)
+        self.assertFalse(job.exists())
+        self.assertFalse(list(self.root.glob('*.pending.json')))
+
+    def test_changed_or_deleted_evidence_keeps_checkpoint_and_job(self):
+        old_cursor = self.cursor_path.read_bytes()
+        for change in ('edit', 'delete'):
+            with self.subTest(change=change):
+                original = json.loads(json.dumps(self.events))
+                if change == 'edit':
+                    self.events[2]['payload']['output'] = '달라진 근거'
+                else:
+                    self.events.pop(2)
+                self.append_turn()
+                self.write(compact=True)
+                job = self.queue(self.path.stat().st_size)
+                with self.assertRaises(ValueError):
+                    self.run_job(job)
+                self.assertTrue(job.exists())
+                self.assertEqual(self.cursor_path.read_bytes(), old_cursor)
+                self.assertEqual(len(self.store.inserts), 1)
+                job.unlink()
+                self.events = original
+
+    def test_different_session_is_rejected_even_for_an_already_consumed_job(self):
+        self.events[0]['payload']['id'] = str(uuid.uuid4())
+        self.write()
+        job = self.queue(1)
+        with self.assertRaises(ValueError):
+            self.run_job(job)
+        self.assertTrue(job.exists())
+
+    def test_legacy_prefix_mismatch_still_requires_verified_manual_recovery(self):
+        cursor = json.loads(self.cursor_path.read_text())
+        for key in ('evidence_count', 'evidence_sha256'):
+            cursor.pop(key, None)
+        s.write_json(self.cursor_path, cursor)
+        self.events[0]['payload']['note'] = 'changed'
+        self.append_turn()
+        self.write(compact=True)
+        with self.assertRaises(ValueError):
+            self.run_job(self.queue(self.path.stat().st_size))
+        self.assertEqual(len(self.store.inserts), 1)
+
+    def test_rewrite_after_oracle_commit_reuses_pending_facts_and_insert_identity(self):
+        self.append_turn()
+        self.write()
+        job = self.queue(self.path.stat().st_size)
+        self.store.lose_ack = True
+        with self.assertRaises(ConnectionError):
+            self.run_job(job)
+        self.events[0]['payload']['note'] = 'new metadata'
+        self.write(compact=True)
+        self.store.lose_ack = False
+        self.run_job(job)
+        self.assertEqual(len(self.store.inserts), 2)
+        self.assertFalse(list(self.root.glob('*.pending.json')))
+        self.assertEqual(json.loads(self.cursor_path.read_text())['last_task']['request'], '다음 요청')
 
 
 if __name__ == '__main__':
