@@ -16,6 +16,24 @@ except ImportError:
 
 
 class HeadroomTests(unittest.TestCase):
+    def test_runtime_uses_huggingface_httpx2_client(self):
+        factories = []
+        clients = []
+        context = ssl.create_default_context()
+        hook = lambda request: None
+        settings = SimpleNamespace(load=lambda: {}, apply_to_environ=lambda data: None)
+        tls = SimpleNamespace(ensure_process_trust=lambda: None, build_httpx_verify=lambda: context)
+        httpx2 = SimpleNamespace(Client=lambda **kwargs: clients.append(kwargs))
+        with patch.dict(sys.modules, {'headroom': SimpleNamespace(settings_store=settings),
+                'headroom.proxy.ssl_context': tls,
+                'huggingface_hub': SimpleNamespace(set_client_factory=factories.append),
+                'huggingface_hub.utils': SimpleNamespace(httpx=httpx2,
+                    _http=SimpleNamespace(httpx2=httpx2, hf_request_event_hook=hook))}):
+            h.initialize_runtime()
+            factories[0]()
+        self.assertEqual(clients, [dict(verify=context, event_hooks={'request': [hook]},
+                                       follow_redirects=True, timeout=None)])
+
     def test_amd_ids_uses_readable_system_file_and_preserves_user_override(self):
         key = 'AMDGPU_ASIC_ID_TABLE_PATH'
         dirs_key = 'AMDGPU_ASIC_ID_TABLE_PATHS'
@@ -39,7 +57,7 @@ class HeadroomTests(unittest.TestCase):
                         patch.dict(sys.modules, {'headroom': SimpleNamespace(settings_store=settings),
                             'headroom.proxy.ssl_context': tls,
                             'huggingface_hub': SimpleNamespace(set_client_factory=lambda factory: None),
-                            'huggingface_hub.utils': SimpleNamespace(_http=None)}):
+                            'huggingface_hub.utils': SimpleNamespace(httpx=None, _http=None)}):
                     h.initialize_runtime()
                     actual = {k: h.os.environ[k] for k in (key, dirs_key) if k in h.os.environ}
                     self.assertEqual(actual, expected)
@@ -79,7 +97,7 @@ class HeadroomTests(unittest.TestCase):
         with patch.dict(sys.modules, {'headroom': SimpleNamespace(settings_store=settings),
                 'headroom.proxy.ssl_context': tls,
                 'huggingface_hub': SimpleNamespace(set_client_factory=lambda factory: None),
-                'huggingface_hub.utils': SimpleNamespace(_http=None)}):
+                'huggingface_hub.utils': SimpleNamespace(httpx=None, _http=None)}):
             h.initialize_runtime()
         self.assertEqual(calls, ['tls'])
 

@@ -102,8 +102,13 @@ def initialize_runtime():
     ensure_process_trust()
     from huggingface_hub import set_client_factory
     from huggingface_hub.utils import _http
+    try:
+        from huggingface_hub.utils import httpx
+    except ImportError:
+        # Hub versions before 1.30 did not expose the HTTP backend alias.
+        httpx = _http.httpx
     # HF creates its own TLS context; share Headroom trust without dropping HF's offline hook.
-    set_client_factory(lambda: _http.httpx.Client(verify=build_httpx_verify(),
+    set_client_factory(lambda: httpx.Client(verify=build_httpx_verify(),
         event_hooks={'request': [_http.hf_request_event_hook]},
         follow_redirects=True, timeout=None))
 
