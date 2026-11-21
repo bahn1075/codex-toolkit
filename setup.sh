@@ -15,7 +15,7 @@ acquire_lock
 snapshot_configuration
 bootstrap
 install_packages
-configure_core
+configure_core --headroom-read-roots
 install_mem0
 configure_headroom
 install_plugins

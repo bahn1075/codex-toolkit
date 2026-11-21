@@ -45,7 +45,7 @@ class Saved(Exception):
     pass
 
 
-def check_configure(existing, state=None):
+def check_configure(existing, state=None, install_roots=False):
     doc = tomlkit.parse(existing)
     with patch.dict(c.os.environ, CT_PREFIX='/tools', CT_CODEX='/native/codex', CT_UV='/uv', CT_NPM='/npm', CT_NODE='/selected/node'), \
             patch.object(c, 'read_state', return_value=state or {}), \
@@ -54,7 +54,9 @@ def check_configure(existing, state=None):
             patch.object(c, 'config', return_value=doc), \
             patch.object(c, 'save_config', side_effect=Saved):
         try:
-            c.configure()
+            with patch.object(c.sys, 'argv', ['configure.py', 'configure'] + (
+                    ['--headroom-read-roots'] if install_roots else [])):
+                c.main()
         except Saved:
             pass
     restored = tomlkit.parse(tomlkit.dumps(doc))
@@ -69,6 +71,34 @@ def check_configure(existing, state=None):
     assert '--enable-web-dashboard=false' in restored['mcp_servers']['serena']['args']
     assert '--open-web-dashboard=false' in restored['mcp_servers']['serena']['args']
     return restored
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    extras = [home / 'work with spaces', home / 'other work']
+    for path in extras:
+        path.mkdir()
+    env_key = 'HEADROOM_MCP_READ_ROOTS'
+    existing = c.os.pathsep.join(('/existing', '/app'))
+    initial = f'[mcp_servers.headroom.env]\n{env_key} = "{existing}"\n'
+    defaults = [str(home), str(home / 'app'), '/app', '/existing']
+    with patch.object(c, 'HOME', home), patch.object(c.sys.stdin, 'isatty', return_value=False), \
+            patch('builtins.input', side_effect=AssertionError('Noninteractive setup prompted')), \
+            contextlib.redirect_stdout(io.StringIO()):
+        configured = check_configure(initial, install_roots=True)
+    assert configured['mcp_servers']['headroom']['env'][env_key].split(c.os.pathsep) == defaults
+
+    output = io.StringIO()
+    with patch.object(c, 'HOME', home), patch.object(c.sys.stdin, 'isatty', return_value=True), \
+            patch.object(output, 'isatty', return_value=True), contextlib.redirect_stdout(output), \
+            patch('builtins.input', side_effect=['예', str(extras[0]), '예', 'relative',
+                                                '예', str(extras[1]), '아니오']):
+        configured = check_configure(tomlkit.dumps(configured), install_roots=True)
+    assert configured['mcp_servers']['headroom']['env'][env_key].split(c.os.pathsep) == \
+        defaults + [str(path) for path in extras]
+    assert '/existing' in output.getvalue()
+    assert str(extras[0]) in output.getvalue()
+    assert check_configure(initial)['mcp_servers']['headroom']['env'][env_key] == existing
 
 
 doc = check_configure('[features]\ncodex_hooks = true\nother = false\n')

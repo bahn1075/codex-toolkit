@@ -102,7 +102,45 @@ def normalize_computer_use_path(doc):
         entry['command'] = str(pathlib.Path(root) / command[len(prefix):])
 
 
-def configure():
+def configure_headroom_read_roots(env):
+    key = 'HEADROOM_MCP_READ_ROOTS'
+    existing = (entry.strip() for entry in env.get(key, '').split(os.pathsep))
+    roots = dict.fromkeys((str(HOME), str(HOME / 'app'), '/app'))
+    roots.update(dict.fromkeys(entry for entry in existing if entry))
+    print('Headroom 파일 읽기 허용 경로:')
+    for root in roots:
+        print(f'  {root}')
+
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        while True:
+            try:
+                if model_choice('상위 디렉터리를 추가 등록하시겠습니까?', ('예', '아니오'), '아니오') == '아니오':
+                    break
+                value = input('추가할 디렉터리 (절대 경로 또는 ~/로 시작): ').strip()
+            except EOFError:
+                break
+
+            try:
+                path = pathlib.Path(value).expanduser()
+                if not path.is_absolute() or os.pathsep in value or not path.is_dir():
+                    raise ValueError
+                resolved = str(path.resolve())
+                if os.pathsep in resolved:
+                    raise ValueError
+            except (OSError, RuntimeError, ValueError):
+                print(f'기존 디렉터리의 절대 경로를 입력해주세요. 목록 구분 문자 {os.pathsep!r}는 사용할 수 없습니다.')
+                continue
+
+            if resolved in roots:
+                print(f'이미 등록된 경로: {resolved}')
+            else:
+                roots[resolved] = None
+                print(f'추가 등록: {resolved}')
+
+    env[key] = os.pathsep.join(roots)
+
+
+def configure(install_headroom_roots=False):
     state = read_state()
     state['path'] = safe_path()
     state['codex'] = os.environ['CT_CODEX']
@@ -149,6 +187,8 @@ def configure():
             env['HEADROOM_SAVINGS_PROFILE'] = 'balanced'
             env['HEADROOM_MCP_READ'] = 'on'
             env['HEADROOM_KOMPRESS_BACKEND'] = state.get('headroom_hardware', {}).get('backend', 'onnx_cpu')
+            if install_headroom_roots:
+                configure_headroom_read_roots(env)
     save_config(doc)
     save_state(state)
     # Older releases used this private prefix only for now-excluded npm tools.
@@ -791,7 +831,7 @@ def main():
         state = read_state()
         state['headroom_hardware'] = json.loads(args[0])
         save_state(state)
-    elif cmd == 'configure': configure()
+    elif cmd == 'configure': configure(install_headroom_roots='--headroom-read-roots' in args)
     elif cmd == 'mem0-settings': mem0_settings()
     elif cmd == 'llm-settings': llm_settings()
     elif cmd == 'mem0-hooks': configure_mem0_hooks()
