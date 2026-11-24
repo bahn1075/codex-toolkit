@@ -459,4 +459,31 @@ with tempfile.TemporaryDirectory() as tmp:
                 assert 'read cache' in str(exc)
             else:
                 raise AssertionError('installation must reject a disabled Headroom read cache')
-print('PASS: real config migration removes legacy Graft and enforces Headroom read cache.')
+        doc['mcp_servers']['custom'] = {'url': 'https://example.test/mcp', 'enabled': True}
+        c.save_config(doc)
+        with patch.dict(c.os.environ, CT_HEADROOM_MODE='mcp'):
+            for option in ('1', ''):
+                with patch.object(c.sys, 'argv', ['configure.py', 'state-init', option]):
+                    c.main()
+                assert c.read_state()['cli_first'] is True
+                c.configure()
+        cli_first_doc = c.config()
+        assert set(cli_first_doc['mcp_servers']) == {'serena', 'headroom', 'mem0', 'custom'}
+        assert all(server['enabled'] is True for server in cli_first_doc['mcp_servers'].values())
+        assert cli_first_doc['mcp_servers']['custom']['url'] == 'https://example.test/mcp'
+        assert 'apps' not in cli_first_doc['features'] and 'plugins' not in cli_first_doc['features']
+        instructions = (codex / 'AGENTS.md').read_text()
+        assert 'CLI first' in instructions and 'MCP first' not in instructions
+        assert '`command -v`' in instructions and '`--help`' in instructions
+        assert all(name in instructions for name in ('aws', 'kubectl', 'Headroom', 'Serena', 'Mem0'))
+
+        for entry in cli_first_doc['mcp_servers'].values():
+            entry['enabled'] = False
+        c.save_config(cli_first_doc)
+        c.save_state({'cli_only': True})
+        c.configure()
+        migrated = c.config()['mcp_servers']
+        assert all(migrated[name]['enabled'] is True for name in ('serena', 'headroom', 'mem0'))
+        assert migrated['custom']['enabled'] is False
+        assert c.read_state().get('cli_first') is True
+print('PASS: real config migration, Headroom read cache and persistent CLI-first configuration.')

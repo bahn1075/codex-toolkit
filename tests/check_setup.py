@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 
-def test_setup_preserves_existing_home(option=None):
+def test_setup_preserves_existing_home(*options):
     source = ROOT
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -20,15 +20,15 @@ def test_setup_preserves_existing_home(option=None):
         (root / 'lib').mkdir()
         (root / 'lib/toolkit.sh').write_text(
             'source ' + shlex.quote(str(source / 'lib/toolkit.sh')) + '\n'
-            'preflight() { :; }\nacquire_lock() { :; }\n'
+            'preflight() { echo "$*" > "$HOME/preflight-args"; }\nacquire_lock() { :; }\n'
             'remove_homebrew_codex() { :; }\nnpm() { return 1; }\n'
             'bootstrap() { mkdir -p "$CT_ROOT"; echo "{}" > "$CT_ROOT/install-state.json"; }\n'
             'install_packages() { mkdir -p "$HOME/.local/bin"; echo updated > "$HOME/.local/bin/codex"; }\n'
             'install_mem0() { echo prompted > "$HOME/model-settings-called"; }\n'
-            'configure_core() { echo "$*" > "$HOME/core-args"; }\n'
+            'configure_core() { echo "$*" > "$HOME/core-args"; echo "$CT_CLI_FIRST" > "$HOME/cli-first"; }\n'
             + ''.join(name + '() { :; }\n' for name in (
                 'configure_headroom', 'install_plugins', 'finish')))
-        result = subprocess.run(['bash', str(root / 'setup.sh')] + ([option] if option else []),
+        result = subprocess.run(['bash', str(root / 'setup.sh')] + list(options),
                                 env={**os.environ, 'HOME': str(home), 'PATH': '/usr/bin:/bin'},
                                 capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
@@ -39,9 +39,14 @@ def test_setup_preserves_existing_home(option=None):
         assert len(backups) == 1 and backups[0].read_text() == 'user settings'
         assert (home / '.local/bin/codex').read_text().strip() == 'updated'
         assert (home / 'model-settings-called').read_text().strip() == 'prompted'
+        expected_mode = '1' if {'--cli-first', '--cli-only'}.intersection(options) else ''
+        assert (home / 'cli-first').read_text().strip() == expected_mode
         assert (home / 'core-args').read_text().strip() == ''
+        assert (home / 'preflight-args').read_text().strip() == '--stop-codex'
 
 
 if __name__ == '__main__':
     test_setup_preserves_existing_home()
     test_setup_preserves_existing_home('--resume')
+    test_setup_preserves_existing_home('--cli-only')
+    test_setup_preserves_existing_home('--resume', '--cli-first')

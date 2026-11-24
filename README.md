@@ -45,7 +45,9 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 - 설치 디렉터리는 `~/.codex` 밖에 두고 일반 사용자로 실행합니다. 스크립트 전체를
   `sudo`로 실행하지 마세요. Linux 빌드 도구 자동 설치 단계에서만 `sudo`를 사용하며
   비밀번호를 요구할 수 있습니다. 설치 후 명령을 다시 점검하며 실패하면 중단합니다.
-- 실행 중인 Codex CLI, Codex 앱, VS Code를 모두 종료하세요.
+- Codex 앱과 VS Code를 닫은 뒤 별도 터미널에서 설치를 실행하세요. `setup.sh`와 `--resume`은
+  시작할 때 현재 사용자의 Codex 프로세스에 종료 신호(SIGTERM)를 보냅니다. `update.sh`를
+  실행하기 전에는 Codex CLI도 종료하세요.
 
 ## 셸 스크립트 사용법
 
@@ -53,6 +55,7 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 |---|---|
 | `bash setup.sh` | 기존 로그인·대화 기록을 유지하며 설치 또는 갱신 |
 | `bash setup.sh --resume` | 기존 `~/.codex`를 유지하면서 실패·누락된 설치와 설정을 다시 맞춤 |
+| `bash setup.sh --cli-first` | 같은 작업을 수행할 수 있는 CLI가 있으면 해당 CLI를 우선 사용하도록 설정 |
 | `bash update.sh` | 설치된 툴킷과 패키지를 업데이트하고 설정을 재적용 |
 | `bash remove.sh --dry-run` | 삭제 대상과 실행할 제거 명령만 확인 |
 | `bash remove.sh` | toolkit 구성요소·Codex native CLI와 설정 연동 제거 |
@@ -67,6 +70,18 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 5. 설정 유효성과 모든 활성 MCP의 실제 시작·도구 목록 및 최종 상태를 검사합니다.
 
 Codex native CLI는 기본적으로 `~/.local/bin/codex`에 설치됩니다.
+
+### CLI 우선 모드
+
+신규 설치에는 `bash setup.sh --cli-first`, 기존 설치에는
+`bash setup.sh --resume --cli-first`를 실행합니다. 이후 `--resume`과 `update.sh`에서도
+이 선택을 유지합니다. `--cli-only`는 같은 옵션의 별칭입니다.
+
+전역 `AGENTS.md`는 Codex가 작업에 맞는 CLI 후보를 찾고, `command -v`로 설치 여부를
+확인하며, 필요하면 `--help`로 해당 명령이 작업을 지원하는지 확인하도록 안내합니다.
+예를 들어 AWS 작업에서는 `aws`, Kubernetes 작업에서는 `kubectl`을 확인합니다.
+적합한 CLI가 있으면 작업 전반에서 해당 CLI를 사용합니다. 적합한 CLI가 없으면
+사용 가능한 MCP를 이용할 수 있습니다. Headroom, Serena, Mem0는 기존 툴킷 지침에 따라 사용합니다.
 
 ### 최초 설치
 

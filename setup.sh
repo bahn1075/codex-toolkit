@@ -4,13 +4,20 @@
 set -Eeuo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 source "$SCRIPT_DIR/lib/toolkit.sh"
-case "${1:-}" in
-  --help|-h) usage; exit 0 ;;
-  --llm) configure_llm; exit 0 ;;
-  --resume|'') ;;
-  *) die "Unknown option: $1" ;;
-esac
-preflight
+if [ "$#" = 1 ]; then
+  case "$1" in
+    --help|-h) usage; exit 0 ;;
+    --llm) configure_llm; exit 0 ;;
+  esac
+fi
+for option in "$@"; do
+  case "$option" in
+    --resume) ;;
+    --cli-first|--cli-only) CT_CLI_FIRST=1 ;;
+    *) die "Unknown option: $option" ;;
+  esac
+done
+preflight --stop-codex
 acquire_lock
 snapshot_configuration
 bootstrap

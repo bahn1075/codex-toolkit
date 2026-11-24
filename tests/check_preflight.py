@@ -13,17 +13,21 @@ import unittest
 
 class PreflightTests(unittest.TestCase):
     def run_preflight(self, uv=0, tools=0, manager="apt-get", fail=0, broken=0,
-                      system="Linux", sudo=1, missing=""):
+                      system="Linux", sudo=1, missing="", from_bundle=False, stop_codex=False, codex_running=False):
         script = r'''
 set -Eeuo pipefail
 SCRIPT_DIR=$PWD
 source ./lib/toolkit.sh
 HOME=/tmp/toolkit-preflight-user
 CT_HOME=$HOME/.codex
+CT_ROOT=$CT_HOME/toolkit
+if [ "$FROM_BUNDLE" = 1 ]; then SCRIPT_DIR=$CT_ROOT/bundle; fi
 unset CODEX_HOME
 uname() { printf '%s\n' "$SYSTEM"; }
 id() { printf '1000\n'; }
-pgrep() { return 1; }
+pgrep() { [ "$CODEX_RUNNING" = 1 ]; }
+pkill() { printf 'PKILL %s\n' "$*"; [ "$CODEX_RUNNING" = 1 ]; }
+sleep() { CODEX_RUNNING=0; }
 command() {
   if [ "${1:-}" != -v ]; then builtin command "$@"; return; fi
   case "$2" in
@@ -57,14 +61,33 @@ yum() { install_system "$@"; }
 pacman() { install_system "$@"; }
 zypper() { install_system "$@"; }
 apk() { install_system "$@"; }
-preflight
+if [ "$STOP_CODEX" = 1 ]; then preflight --stop-codex; else preflight; fi
 printf 'READY uv=%s tools=%s\n' "$HAS_UV" "$HAS_TOOLS"
 '''
         env = dict(os.environ, HAS_UV=str(uv), HAS_TOOLS=str(tools),
                    MANAGER=manager, FAIL_INSTALL=str(fail), BROKEN_INSTALL=str(broken),
-                   SYSTEM=system, HAS_SUDO=str(sudo), MISSING=missing)
+                   SYSTEM=system, HAS_SUDO=str(sudo), MISSING=missing, FROM_BUNDLE=str(int(from_bundle)),
+                   STOP_CODEX=str(int(stop_codex)), CODEX_RUNNING=str(int(codex_running)))
         return subprocess.run(["bash", "-c", script], cwd=ROOT, env=env,
                               text=True, capture_output=True)
+
+    def test_setup_signals_codex_and_waits_for_exit(self):
+        for running in (True, False):
+            with self.subTest(running=running):
+                result = self.run_preflight(uv=1, tools=1, stop_codex=True, codex_running=running)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("PKILL -u 1000 -x codex", result.stdout)
+                self.assertIn("READY", result.stdout)
+
+    def test_update_rejects_running_codex_without_signalling_it(self):
+        result = self.run_preflight(uv=1, tools=1, codex_running=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("A codex process is running", result.stderr)
+        self.assertNotIn("PKILL", result.stdout)
+
+    def test_installed_bundle_can_resume(self):
+        result = self.run_preflight(uv=1, tools=1, from_bundle=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_both_missing_are_installed(self):
         result = self.run_preflight()

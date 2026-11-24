@@ -8,6 +8,7 @@ CT_FAILURES=0
 CT_LOCK_HELD=0
 CT_STAGE=preflight
 CT_PY=''
+CT_CLI_FIRST=''
 CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-}
 # Honor trusted OS roots, including enterprise roots, on old and new uv versions.
 export UV_SYSTEM_CERTS=${UV_SYSTEM_CERTS:-true}
@@ -23,11 +24,14 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '\n%s\n' "$*"; }
 usage() {
   cat <<'EOF'
-Usage: bash setup.sh [--resume|--llm]
+Usage: bash setup.sh [--resume] [--cli-first] | bash setup.sh --llm
 Default: preserve ~/.codex, install/update Codex and configure toolkit tools and Superpowers.
 --resume: rerun setup with the same data-preserving behavior.
+--cli-first: prefer an equivalent command-line tool, with Headroom, Serena and Mem0 available.
+             This choice persists on resume and update. --cli-only is an alias.
 --llm: validate and save inference/embedding providers and primary/secondary connections.
-Close Codex, Codex app and VS Code before running. Do not run with sudo.
+Setup stops your running Codex processes. Close Codex app and VS Code before running.
+Do not run with sudo.
 Optional environment settings (first installation):
   CT_HEADROOM_MODE=mcp             Headroom is available only as an MCP tool
   CT_AUTH=chatgpt                 this bundle uses manual ChatGPT login
@@ -79,14 +83,29 @@ ensure_build_tools() {
 }
 preflight() {
   case "$(uname -s)" in Darwin|Linux) ;; *) die 'Only macOS and Linux are supported.' ;; esac
-  [ "$(id -u)" != 0 ] || die 'Run as your normal user, not root/sudo.'
+  local ct_uid ct_attempt
+  ct_uid=$(id -u)
+  [ "$ct_uid" != 0 ] || die 'Run as your normal user, not root/sudo.'
   [ "${CODEX_HOME:-$CT_HOME}" = "$CT_HOME" ] || die 'Custom CODEX_HOME detected. This bundle targets ~/.codex; unset it before setup.'
   [ "${CT_AUTH:-chatgpt}" = chatgpt ] || die 'This bundle is configured for ChatGPT login.'
   case "$HOME" in /*) ;; *) die 'HOME must be absolute.' ;; esac
   [ "$HOME" != / ] || die 'Refusing root HOME.'
   case "$HOME$SCRIPT_DIR" in *$'\n'*|*$'\r'*) die 'Newlines in paths are unsupported.' ;; esac
-  case "$SCRIPT_DIR/" in "$CT_HOME/"*) die 'Extract this bundle outside ~/.codex before setup.' ;; esac
+  case "$SCRIPT_DIR/" in
+    "$CT_ROOT/bundle/") ;;
+    "$CT_HOME/"*) die 'Extract this bundle outside ~/.codex before setup.' ;;
+  esac
   [ ! -L "$CT_HOME" ] || die '~/.codex is a symlink; resolve its intended target before setup.'
+  if [ "${1:-}" = --stop-codex ]; then
+    pkill -u "$ct_uid" -x codex || [ "$?" -eq 1 ] || die 'Could not terminate running Codex processes.'
+    for ct_attempt in 1 2 3 4 5; do
+      pgrep -u "$ct_uid" -x codex >/dev/null 2>&1 || break
+      sleep 1
+    done
+  fi
+  if command -v pgrep >/dev/null && pgrep -u "$ct_uid" -x codex >/dev/null 2>&1; then
+    die 'A codex process is running. Close Codex/VS Code sessions and run again.'
+  fi
   for ct_cmd in brew curl git bun; do
     command -v "$ct_cmd" >/dev/null || die "Required command missing: $ct_cmd"
   done
@@ -94,10 +113,6 @@ preflight() {
   CT_BREW=$(command -v brew)
   CT_PREFIX=$("$CT_BREW" --prefix)
   export PATH="$HOME/.local/bin:$CT_PREFIX/bin:$CT_PREFIX/sbin:$PATH"
-  # Do not initialize/reset an actively running Codex process.
-  if command -v pgrep >/dev/null && pgrep -u "$(id -u)" -x codex >/dev/null 2>&1; then
-    die 'A codex process is running. Close Codex/VS Code sessions and run again.'
-  fi
   if ! command -v uv >/dev/null; then
     note 'Installing missing uv with Homebrew.'
     "$CT_BREW" install uv || die 'Could not install uv with Homebrew.'
@@ -174,7 +189,7 @@ bootstrap() {
   CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-mcp}
   [ "$CT_HEADROOM_MODE" = mcp ] || die 'CT_HEADROOM_MODE must be mcp.'
   export CT_HEADROOM_MODE CT_PREFIX CT_UV
-  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" state-init
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" state-init "$CT_CLI_FIRST"
 }
 snapshot_configuration() {
   CT_STAGE=backup
