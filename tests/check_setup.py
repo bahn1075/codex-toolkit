@@ -39,7 +39,7 @@ def test_setup_preserves_existing_home(option=None):
         assert len(backups) == 1 and backups[0].read_text() == 'user settings'
         assert (home / '.local/bin/codex').read_text().strip() == 'updated'
         assert (home / 'model-settings-called').read_text().strip() == 'prompted'
-        assert (home / 'core-args').read_text().strip() == '--headroom-read-roots'
+        assert (home / 'core-args').read_text().strip() == ''
 
 
 if __name__ == '__main__':

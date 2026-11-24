@@ -45,7 +45,7 @@ class Saved(Exception):
     pass
 
 
-def check_configure(existing, state=None, install_roots=False):
+def check_configure(existing, state=None):
     doc = tomlkit.parse(existing)
     with patch.dict(c.os.environ, CT_PREFIX='/tools', CT_CODEX='/native/codex', CT_UV='/uv', CT_NPM='/npm', CT_NODE='/selected/node'), \
             patch.object(c, 'read_state', return_value=state or {}), \
@@ -54,8 +54,7 @@ def check_configure(existing, state=None, install_roots=False):
             patch.object(c, 'config', return_value=doc), \
             patch.object(c, 'save_config', side_effect=Saved):
         try:
-            with patch.object(c.sys, 'argv', ['configure.py', 'configure'] + (
-                    ['--headroom-read-roots'] if install_roots else [])):
+            with patch.object(c.sys, 'argv', ['configure.py', 'configure']):
                 c.main()
         except Saved:
             pass
@@ -73,35 +72,19 @@ def check_configure(existing, state=None, install_roots=False):
     return restored
 
 
-with tempfile.TemporaryDirectory() as tmp:
-    home = Path(tmp)
-    extras = [home / 'work with spaces', home / 'other work']
-    for path in extras:
-        path.mkdir()
-    env_key = 'HEADROOM_MCP_READ_ROOTS'
-    existing = c.os.pathsep.join(('/existing', '/app'))
-    initial = f'[mcp_servers.headroom.env]\n{env_key} = "{existing}"\n'
-    defaults = [str(home), str(home / 'app'), '/app', '/existing']
-    with patch.object(c, 'HOME', home), patch.object(c.sys.stdin, 'isatty', return_value=False), \
-            patch('builtins.input', side_effect=AssertionError('Noninteractive setup prompted')), \
-            contextlib.redirect_stdout(io.StringIO()):
-        configured = check_configure(initial, install_roots=True)
-    assert configured['mcp_servers']['headroom']['env'][env_key].split(c.os.pathsep) == defaults
+env_key = 'HEADROOM_MCP_READ_ROOTS'
+legacy_defaults = c.os.pathsep.join((str(c.HOME), str(c.HOME / 'app'), '/app'))
+configured = check_configure(f'[mcp_servers.headroom.env]\n{env_key} = {json.dumps(legacy_defaults)}\n')
+assert env_key not in configured['mcp_servers']['headroom']['env']
 
-    output = io.StringIO()
-    with patch.object(c, 'HOME', home), patch.object(c.sys.stdin, 'isatty', return_value=True), \
-            patch.object(output, 'isatty', return_value=True), contextlib.redirect_stdout(output), \
-            patch('builtins.input', side_effect=['예', str(extras[0]), '예', 'relative',
-                                                '예', str(extras[1]), '아니오']):
-        configured = check_configure(tomlkit.dumps(configured), install_roots=True)
-    assert configured['mcp_servers']['headroom']['env'][env_key].split(c.os.pathsep) == \
-        defaults + [str(path) for path in extras]
-    assert '/existing' in output.getvalue()
-    assert str(extras[0]) in output.getvalue()
-    assert check_configure(initial)['mcp_servers']['headroom']['env'][env_key] == existing
+for existing in ('/existing', legacy_defaults + c.os.pathsep + '/existing'):
+    configured = check_configure(f'[mcp_servers.headroom.env]\n{env_key} = {json.dumps(existing)}\n')
+    assert configured['mcp_servers']['headroom']['env'][env_key] == existing
 
 
 doc = check_configure('[features]\ncodex_hooks = true\nother = false\n')
+assert env_key not in doc['mcp_servers']['headroom']['env']
+assert 'cwd' not in doc['mcp_servers']['headroom']
 assert doc['features']['other'] is False
 assert 'graft' not in doc['mcp_servers']
 doc = check_configure(tomlkit.dumps(doc))

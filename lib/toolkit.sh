@@ -223,7 +223,7 @@ configure_core() {
   CT_STAGE=configuration
   note 'Applying shared CLI/IDE MCP config, global instructions and shell aliases.'
   "$CT_PY" "$SCRIPT_DIR/lib/configure.py" remove-claude-mem
-  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" configure "$@"
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" configure
   "$CT_CODEX" mcp list
   # Use VS Code's official extension identifier. It shares ~/.codex/config.toml.
   if command -v code >/dev/null; then

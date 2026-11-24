@@ -313,10 +313,13 @@ MCP 서버에는 `HEADROOM_MODE=token`과 `HEADROOM_SAVINGS_PROFILE=balanced`를
 복원 hash만 Codex에 반환하도록 전역 정책을 설치합니다. 등록만으로 자동 압축되지는 않습니다.
 `headroom_read`도 활성화하여 변경 없는 반복 파일 읽기는 캐시 marker로 처리합니다.
 정확한 원문·편집·인용에는 `headroom_retrieve`, 변경 후 읽기에는 `fresh=true`를 사용합니다.
-설치와 `--resume`은 기존 `HEADROOM_MCP_READ_ROOTS`에 홈 디렉터리, `~/app`, `/app`을
-추가합니다. Headroom은 이 경로 아래의 하위 디렉터리도 읽을 수 있습니다.
-터미널에서는 현재 목록을 먼저 보여주고, `아니오`를 선택할 때까지 경로를 추가할 수 있습니다.
-비대화형 설치는 입력을 받지 않고 기본 경로와 기존 경로를 저장합니다.
+`setup.sh`와 `setup.sh --resume`은 경로 입력 없이 사용자 전역 설정인
+`~/.codex/config.toml`에 Headroom을 등록합니다. 기본적으로 `headroom_read`는
+Codex가 MCP 서버를 시작할 때 전달한 세션의 작업 디렉터리와 그 하위를 읽습니다.
+작업 디렉터리가 홈 디렉터리 또는 파일시스템 루트이면 Headroom은 기본 읽기 범위를 제공하지 않습니다.
+이전 설치가 추가한 `HEADROOM_MCP_READ_ROOTS` 값이 홈 디렉터리, `~/app`, `/app`의
+기본 목록과 일치하면 설치 및 `--resume`에서 자동으로 삭제합니다. 사용자 지정 목록은
+보존되며 세션 작업 디렉터리 대신 해당 경로를 사용합니다.
 
 설치와 업데이트는 OS/아키텍처 및 Linux PCI의 GPU 제조사를 감지합니다.
 기본 패키지는 `headroom-ai[mcp,code]`, ONNX Runtime, tokenizer용 Transformers이며,
