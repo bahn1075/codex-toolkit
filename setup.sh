@@ -13,7 +13,7 @@ fi
 for option in "$@"; do
   case "$option" in
     --resume) ;;
-    --cli-first|--cli-only) CT_CLI_FIRST=1 ;;
+    --cli-first|--cli-only) ;;
     *) die "Unknown option: $option" ;;
   esac
 done

@@ -25,7 +25,7 @@ def test_setup_preserves_existing_home(*options):
             'bootstrap() { mkdir -p "$CT_ROOT"; echo "{}" > "$CT_ROOT/install-state.json"; }\n'
             'install_packages() { mkdir -p "$HOME/.local/bin"; echo updated > "$HOME/.local/bin/codex"; }\n'
             'install_mem0() { echo prompted > "$HOME/model-settings-called"; }\n'
-            'configure_core() { echo "$*" > "$HOME/core-args"; echo "$CT_CLI_FIRST" > "$HOME/cli-first"; }\n'
+            'configure_core() { echo "$*" > "$HOME/core-args"; }\n'
             + ''.join(name + '() { :; }\n' for name in (
                 'configure_headroom', 'install_plugins', 'finish')))
         result = subprocess.run(['bash', str(root / 'setup.sh')] + list(options),
@@ -39,8 +39,6 @@ def test_setup_preserves_existing_home(*options):
         assert len(backups) == 1 and backups[0].read_text() == 'user settings'
         assert (home / '.local/bin/codex').read_text().strip() == 'updated'
         assert (home / 'model-settings-called').read_text().strip() == 'prompted'
-        expected_mode = '1' if {'--cli-first', '--cli-only'}.intersection(options) else ''
-        assert (home / 'cli-first').read_text().strip() == expected_mode
         assert (home / 'core-args').read_text().strip() == ''
         assert (home / 'preflight-args').read_text().strip() == '--stop-codex'
 

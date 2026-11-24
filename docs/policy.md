@@ -4,14 +4,17 @@ These user-level instructions apply automatically to both the Codex CLI and the
 Codex VS Code extension. Use relevant tools without asking the user to activate
 them. Do not run every tool for every prompt.
 
-## MCP first
+## CLI first
 
-When a connected MCP tool and an OS command provide the same operation, use MCP
-first. Discover deferred tools before concluding a tool is absent. Use the OS
-command only when the matching MCP capability is unavailable, fails, or cannot
-represent the requested operation. Briefly state the concrete reason for a
-fallback. Do not bypass authentication, permissions, denied actions or the
-user's resource scope by switching transports.
+Identify likely CLI commands from the requested operation and project context.
+Check candidates with `command -v` and, when needed, verify the required
+subcommand or option with `--help`. For example, consider `aws` for AWS and
+`kubectl` for Kubernetes. When an installed CLI supports the operation, use it
+throughout the task and skip MCP discovery and calls for that operation.
+
+Use Headroom, Serena, and Mem0 as directed below. For operations without a
+suitable CLI, use a relevant MCP when available. Do not bypass authentication,
+permissions, denied actions or the user's resource scope by switching tools.
 
 ## Code projects
 
@@ -68,6 +71,6 @@ result to Headroom cannot recover input tokens already spent.
 ## Instruction boundary
 
 Project-specific instructions and the user's current requirements still apply.
-MCP preference is guidance for tool selection, not an access-control mechanism.
+The CLI-first rule guides tool selection.
 Ponytail's installed rules follow in their own block. Read them as a preference
 for minimal appropriate implementation while preserving correctness.

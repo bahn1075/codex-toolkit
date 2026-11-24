@@ -461,12 +461,9 @@ with tempfile.TemporaryDirectory() as tmp:
                 raise AssertionError('installation must reject a disabled Headroom read cache')
         doc['mcp_servers']['custom'] = {'url': 'https://example.test/mcp', 'enabled': True}
         c.save_config(doc)
-        with patch.dict(c.os.environ, CT_HEADROOM_MODE='mcp'):
-            for option in ('1', ''):
-                with patch.object(c.sys, 'argv', ['configure.py', 'state-init', option]):
-                    c.main()
-                assert c.read_state()['cli_first'] is True
-                c.configure()
+        c.write(c.CODEX / 'AGENTS.md',
+                'User notes\n<!-- BEGIN CODEX-TOOLKIT -->\n## MCP first\n<!-- END CODEX-TOOLKIT -->\n')
+        c.configure()
         cli_first_doc = c.config()
         assert set(cli_first_doc['mcp_servers']) == {'serena', 'headroom', 'mem0', 'custom'}
         assert all(server['enabled'] is True for server in cli_first_doc['mcp_servers'].values())
@@ -474,6 +471,7 @@ with tempfile.TemporaryDirectory() as tmp:
         assert 'apps' not in cli_first_doc['features'] and 'plugins' not in cli_first_doc['features']
         instructions = (codex / 'AGENTS.md').read_text()
         assert 'CLI first' in instructions and 'MCP first' not in instructions
+        assert 'User notes' in instructions
         assert '`command -v`' in instructions and '`--help`' in instructions
         assert all(name in instructions for name in ('aws', 'kubectl', 'Headroom', 'Serena', 'Mem0'))
 
@@ -485,5 +483,5 @@ with tempfile.TemporaryDirectory() as tmp:
         migrated = c.config()['mcp_servers']
         assert all(migrated[name]['enabled'] is True for name in ('serena', 'headroom', 'mem0'))
         assert migrated['custom']['enabled'] is False
-        assert c.read_state().get('cli_first') is True
-print('PASS: real config migration, Headroom read cache and persistent CLI-first configuration.')
+        assert 'cli_only' not in c.read_state()
+print('PASS: real config migration, Headroom read cache and default CLI-first policy.')

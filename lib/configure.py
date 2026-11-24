@@ -105,8 +105,6 @@ def normalize_computer_use_path(doc):
 def configure():
     state = read_state()
     restore_toolkit_mcp = state.pop('cli_only', False)
-    if restore_toolkit_mcp:
-        state['cli_first'] = True
     state['path'] = safe_path()
     state['codex'] = os.environ['CT_CODEX']
     state['uv'] = os.environ['CT_UV']
@@ -173,20 +171,6 @@ def configure():
     instructions = CODEX / 'AGENTS.md'
     text = instructions.read_text() if instructions.exists() else ''
     policy = (BUNDLE.parent / 'docs/policy.md').read_text()
-    if state.get('cli_first'):
-        policy = re.sub(
-            r'(?ms)^## MCP first\n.*?(?=^## Code projects\n)',
-            '## CLI first\n\n'
-            'Identify likely CLI commands from the requested operation and project context. '
-            'Check candidates with `command -v` and, when needed, verify the required subcommand '
-            'or option with `--help`. For example, consider aws for AWS and kubectl for Kubernetes.\n'
-            'When an installed CLI supports the operation, use it throughout the task and skip '
-            'MCP discovery and calls for that operation.\n\n'
-            'Use Headroom, Serena, and Mem0 as directed below. '
-            'For operations without a suitable CLI, use a relevant MCP when available. '
-            'Respect authentication, permissions, and the user’s resource scope.\n\n',
-            policy,
-        )
     text = replace_block(text, 'CODEX-TOOLKIT', policy)
     pony = (ROOT / 'repos/ponytail/AGENTS.md').read_text()
     text = replace_block(text, 'PONYTAIL-UPSTREAM', pony)
@@ -805,8 +789,6 @@ def main():
     elif cmd == 'state-init':
         state = read_state()
         state.update(headroom_mode=os.environ['CT_HEADROOM_MODE'])
-        if args == ['1']:
-            state['cli_first'] = True
         save_state(state)
     elif cmd == 'record-packages':
         state = read_state()

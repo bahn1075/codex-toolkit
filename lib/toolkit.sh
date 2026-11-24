@@ -8,7 +8,6 @@ CT_FAILURES=0
 CT_LOCK_HELD=0
 CT_STAGE=preflight
 CT_PY=''
-CT_CLI_FIRST=''
 CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-}
 # Honor trusted OS roots, including enterprise roots, on old and new uv versions.
 export UV_SYSTEM_CERTS=${UV_SYSTEM_CERTS:-true}
@@ -24,11 +23,10 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '\n%s\n' "$*"; }
 usage() {
   cat <<'EOF'
-Usage: bash setup.sh [--resume] [--cli-first] | bash setup.sh --llm
+Usage: bash setup.sh [--resume] | bash setup.sh --llm
 Default: preserve ~/.codex, install/update Codex and configure toolkit tools and Superpowers.
 --resume: rerun setup with the same data-preserving behavior.
---cli-first: prefer an equivalent command-line tool, with Headroom, Serena and Mem0 available.
-             This choice persists on resume and update. --cli-only is an alias.
+Tool policy: prefer an equivalent command-line tool, with Headroom, Serena and Mem0 available.
 --llm: validate and save inference/embedding providers and primary/secondary connections.
 Setup stops your running Codex processes. Close Codex app and VS Code before running.
 Do not run with sudo.
@@ -189,7 +187,7 @@ bootstrap() {
   CT_HEADROOM_MODE=${CT_HEADROOM_MODE:-mcp}
   [ "$CT_HEADROOM_MODE" = mcp ] || die 'CT_HEADROOM_MODE must be mcp.'
   export CT_HEADROOM_MODE CT_PREFIX CT_UV
-  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" state-init "$CT_CLI_FIRST"
+  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" state-init
 }
 snapshot_configuration() {
   CT_STAGE=backup

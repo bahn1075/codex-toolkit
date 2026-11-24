@@ -55,7 +55,6 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 |---|---|
 | `bash setup.sh` | 기존 로그인·대화 기록을 유지하며 설치 또는 갱신 |
 | `bash setup.sh --resume` | 기존 `~/.codex`를 유지하면서 실패·누락된 설치와 설정을 다시 맞춤 |
-| `bash setup.sh --cli-first` | 같은 작업을 수행할 수 있는 CLI가 있으면 해당 CLI를 우선 사용하도록 설정 |
 | `bash update.sh` | 설치된 툴킷과 패키지를 업데이트하고 설정을 재적용 |
 | `bash remove.sh --dry-run` | 삭제 대상과 실행할 제거 명령만 확인 |
 | `bash remove.sh` | toolkit 구성요소·Codex native CLI와 설정 연동 제거 |
@@ -71,11 +70,10 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 
 Codex native CLI는 기본적으로 `~/.local/bin/codex`에 설치됩니다.
 
-### CLI 우선 모드
+### 기본 도구 정책
 
-신규 설치에는 `bash setup.sh --cli-first`, 기존 설치에는
-`bash setup.sh --resume --cli-first`를 실행합니다. 이후 `--resume`과 `update.sh`에서도
-이 선택을 유지합니다. `--cli-only`는 같은 옵션의 별칭입니다.
+`setup.sh`, `setup.sh --resume`, `update.sh`는 CLI 우선 지침을 기본으로 설치합니다.
+이전 `--cli-first`와 `--cli-only` 옵션을 사용한 명령도 같은 기본 동작을 수행합니다.
 
 전역 `AGENTS.md`는 Codex가 작업에 맞는 CLI 후보를 찾고, `command -v`로 설치 여부를
 확인하며, 필요하면 `--help`로 해당 명령이 작업을 지원하는지 확인하도록 안내합니다.
