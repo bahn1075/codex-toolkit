@@ -68,15 +68,29 @@ command = "{root}-custom/bin/graft"
     (codex / 'mem0.json').write_text('private configuration')
     (codex / 'sessions').mkdir()
     (codex / 'sessions/history.jsonl').write_text('keep conversation')
+    agy_bin = home / '.local/bin/agy'
+    agy_bin.write_text('managed agy binary')
+    agy_plugin = home / '.gemini/config/plugins/codex-toolkit'
+    (agy_plugin / 'rules').mkdir(parents=True)
+    (agy_plugin / 'plugin.json').write_text('{"name":"codex-toolkit"}\n')
+    (agy_plugin / 'mcp_config.json').write_text(json.dumps({'mcpServers': {'serena': {'command': f'{root}/bin/serena'}}}))
+    keep_plugin = home / '.gemini/config/plugins/keep-plugin'
+    keep_plugin.mkdir(parents=True)
+    (keep_plugin / 'plugin.json').write_text('{"name":"keep-plugin"}\n')
+    (root / 'install-state.json').write_text(json.dumps({
+        'codex': str(link), 'agy': str(agy_bin), 'agy_installed': 'true', 'agy_plugin_configured': True}))
 
     with contextlib.redirect_stdout(io.StringIO()):
         r.uninstall(home, dry_run=True)
-    assert root.exists() and link.exists()
+    assert root.exists() and link.exists() and agy_bin.exists() and agy_plugin.exists()
     assert not (home / '.codex-backups').exists()
     with contextlib.redirect_stdout(io.StringIO()):
         r.uninstall(home)
     assert not root.exists()
     assert not link.is_symlink()
+    assert not agy_bin.exists()
+    assert not agy_plugin.exists()
+    assert (keep_plugin / 'plugin.json').exists()
     assert not (codex / 'packages/standalone').exists()
     doc = tomlkit.parse((codex / 'config.toml').read_text())
     assert doc['model'] == 'kept-model'
@@ -186,6 +200,18 @@ with tempfile.TemporaryDirectory() as tmp:
     with contextlib.redirect_stdout(io.StringIO()):
         r.uninstall(home)
     assert native.exists(), 'do not delete a user replacement at the old native path'
+
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    root = home / '.codex/toolkit'
+    root.mkdir(parents=True)
+    user_agy = home / '.local/bin/agy'
+    user_agy.parent.mkdir(parents=True)
+    user_agy.write_text('pre-existing user agy binary')
+    (root / 'install-state.json').write_text(json.dumps({'agy': str(user_agy)}))
+    with contextlib.redirect_stdout(io.StringIO()):
+        r.uninstall(home)
+    assert user_agy.exists(), 'do not delete a pre-existing user agy binary'
 
 with tempfile.TemporaryDirectory() as tmp:
     home = Path(tmp)

@@ -1,8 +1,8 @@
 # Codex tool policy
 
-These user-level instructions apply automatically to both the Codex CLI and the
-Codex VS Code extension. Use relevant tools without asking the user to activate
-them. Do not run every tool for every prompt.
+These user-level instructions apply automatically to Codex (CLI and VS Code
+extension) and Antigravity. Use relevant tools without asking the user to
+activate them. Do not run every tool for every prompt.
 
 ## CLI first
 

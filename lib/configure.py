@@ -28,6 +28,30 @@ STATE = ROOT / 'install-state.json'
 BUNDLE = pathlib.Path(__file__).resolve().parent
 CONFIG = CODEX / 'config.toml'
 MEM0_CONFIG = CODEX / 'mem0.json'
+AGY_PLUGIN_NAME = 'codex-toolkit'
+AGY_RULE_MAX_BYTES = 24000
+
+
+def agy_plugin_dir(home=None):
+    base = pathlib.Path(home) if home is not None else HOME
+    return base / '.gemini/config/plugins' / AGY_PLUGIN_NAME
+
+
+def antigravity_detected(home=None, state=None):
+    base = pathlib.Path(home) if home is not None else HOME
+    state = state if state is not None else read_state()
+    if os.environ.get('CT_AGY') or state.get('agy') or state.get('agy_plugin_configured'):
+        return True
+    if (base / '.local/bin/agy').exists():
+        return True
+    gemini = base / '.gemini'
+    if any((gemini / name).exists() for name in ('antigravity', 'antigravity-cli', 'antigravity-ide', 'config')):
+        return True
+    if base == pathlib.Path.home():
+        if pathlib.Path('/Applications/Antigravity.app').exists():
+            return True
+        return bool(shutil.which('agy') or shutil.which('antigravity'))
+    return False
 
 
 def write(path, content, mode=0o600):
@@ -102,14 +126,55 @@ def normalize_computer_use_path(doc):
         entry['command'] = str(pathlib.Path(root) / command[len(prefix):])
 
 
+def write_agy_manifest(plugin_dir):
+    manifest = {
+        'name': AGY_PLUGIN_NAME,
+        'displayName': 'Codex Toolkit',
+        'version': '1.0.0',
+        'description': 'Serena, Headroom, Mem0, and Ponytail integration managed by codex-toolkit.',
+    }
+    write(plugin_dir / 'plugin.json', json.dumps(manifest, indent=2) + '\n', 0o644)
+
+
+def configure_antigravity(state, specs, doc, policy, pony):
+    plugin_dir = agy_plugin_dir(HOME)
+    for parent in (HOME / '.gemini', HOME / '.gemini/config', HOME / '.gemini/config/plugins', plugin_dir):
+        if parent.is_symlink():
+            raise RuntimeError(f'Refusing to write Antigravity plugin through symlink: {parent}')
+    write_agy_manifest(plugin_dir)
+    agy_servers = {}
+    for name, (command, args) in specs.items():
+        env = {'PATH': state['path']}
+        if name == 'headroom':
+            codex_env = doc['mcp_servers']['headroom'].get('env', {})
+            env['HEADROOM_MODE'] = 'token'
+            env['HEADROOM_SAVINGS_PROFILE'] = 'balanced'
+            env['HEADROOM_MCP_READ'] = 'on'
+            if 'HEADROOM_MCP_READ_ROOTS' in codex_env:
+                env['HEADROOM_MCP_READ_ROOTS'] = str(codex_env['HEADROOM_MCP_READ_ROOTS'])
+            env['HEADROOM_KOMPRESS_BACKEND'] = state.get('headroom_hardware', {}).get('backend', 'onnx_cpu')
+        agy_servers[name] = {'command': command, 'args': list(args), 'env': env}
+    write(plugin_dir / 'mcp_config.json', json.dumps({'mcpServers': agy_servers}, indent=2) + '\n')
+    rules_path = plugin_dir / 'rules/AGENTS.md'
+    rules_text = rules_path.read_text() if rules_path.exists() else ''
+    rules_text = replace_block(rules_text, 'CODEX-TOOLKIT', policy)
+    rules_text = replace_block(rules_text, 'PONYTAIL-UPSTREAM', pony)
+    write(rules_path, rules_text.lstrip(), 0o644)
+
+
 def configure():
     state = read_state()
     restore_toolkit_mcp = state.pop('cli_only', False)
     state['path'] = safe_path()
     state['codex'] = os.environ['CT_CODEX']
+    if os.environ.get('CT_AGY'):
+        state['agy'] = os.environ['CT_AGY']
     state['uv'] = os.environ['CT_UV']
     for key in ('node', 'npm', 'npm_versions', 'graft_binary', 'graft_auto_start'):
         state.pop(key, None)
+    agy_active = antigravity_detected(HOME, state)
+    if agy_active:
+        state['agy_plugin_configured'] = True
     doc = config()
     # Keep login independent from any old OS keychain entry.
     doc['cli_auth_credentials_store'] = 'file'
@@ -175,15 +240,23 @@ def configure():
     pony = (ROOT / 'repos/ponytail/AGENTS.md').read_text()
     text = replace_block(text, 'PONYTAIL-UPSTREAM', pony)
     write(instructions, text)
-    # Aliases only select the same real Codex binary; no launch-time wrapping needed.
+    if agy_active:
+        configure_antigravity(state, specs, doc, policy, pony)
+    # Aliases only select the same real Codex/Antigravity binaries; no launch-time wrapping needed.
     init = ROOT / 'shell-init.sh'
-    shell_prefix = os.pathsep.join([os.path.dirname(state['codex']), str(ROOT / 'bin'),
-                                  os.environ['CT_PREFIX'] + '/bin', os.environ['CT_PREFIX'] + '/sbin'])
+    prefix_dirs = [os.path.dirname(state['codex'])]
+    if state.get('agy'):
+        prefix_dirs.append(os.path.dirname(state['agy']))
+    prefix_dirs.extend([str(ROOT / 'bin'), os.environ['CT_PREFIX'] + '/bin', os.environ['CT_PREFIX'] + '/sbin'])
+    shell_prefix = os.pathsep.join(dict.fromkeys(prefix_dirs))
     init_text = ('# Generated Codex toolkit shell integration\n'
         + 'export PATH=' + shlex.quote(shell_prefix) + ':"$PATH"\n'
         + 'unalias codex 2>/dev/null || true\n'
-        + 'alias codex=' + shlex.quote(shlex.quote(state['codex'])) + '\n'
-        + 'alias codex-update=' + shlex.quote('bash ' + shlex.quote(str(ROOT / 'bundle/update.sh'))) + '\n'
+        + 'alias codex=' + shlex.quote(shlex.quote(state['codex'])) + '\n')
+    if state.get('agy'):
+        init_text += ('unalias agy 2>/dev/null || true\n'
+            + 'alias agy=' + shlex.quote(shlex.quote(state['agy'])) + '\n')
+    init_text += ('alias codex-update=' + shlex.quote('bash ' + shlex.quote(str(ROOT / 'bundle/update.sh'))) + '\n'
         + 'alias codex-doctor=' + shlex.quote(shlex.quote(str(ROOT / 'bin/codex-doctor'))) + '\n')
     write(init, init_text)
     zdot = pathlib.Path(os.environ.get('ZDOTDIR') or str(HOME)).expanduser()
@@ -581,6 +654,21 @@ def configure_mem0_hooks():
             group['matcher'] = 'startup|resume'
         groups.append(group)
     write(path, json.dumps(doc, indent=2) + '\n')
+    if antigravity_detected(HOME):
+        plugin_dir = agy_plugin_dir(HOME)
+        for parent in (HOME / '.gemini', HOME / '.gemini/config', HOME / '.gemini/config/plugins', plugin_dir):
+            if parent.is_symlink():
+                raise RuntimeError(f'Refusing to write Antigravity hooks through symlink: {parent}')
+        if not (plugin_dir / 'plugin.json').exists():
+            write_agy_manifest(plugin_dir)
+        agy_hooks_path = plugin_dir / 'hooks.json'
+        agy_doc = json.loads(agy_hooks_path.read_text()) if agy_hooks_path.exists() else {}
+        handler = {'type': 'command', 'command': command, 'timeout': 3}
+        agy_doc['codex-toolkit-mem0'] = {
+            'SessionStart': [dict(handler)],
+            'Stop': [dict(handler)],
+        }
+        write(agy_hooks_path, json.dumps(agy_doc, indent=2) + '\n')
     configure_mem0_retry(command)
 
 
@@ -663,6 +751,31 @@ def validate():
         raise RuntimeError('Headroom file read cache must be enabled.')
     if (CODEX / 'AGENTS.md').stat().st_size > int(doc.get('project_doc_max_bytes', 32768)):
         raise RuntimeError('Global AGENTS.md exceeds instruction byte budget.')
+    if state.get('agy_plugin_configured'):
+        plugin_dir = agy_plugin_dir(HOME)
+        manifest = json.loads((plugin_dir / 'plugin.json').read_text())
+        if manifest.get('name') != AGY_PLUGIN_NAME:
+            raise RuntimeError('Invalid Antigravity plugin manifest name.')
+        agy_mcp = json.loads((plugin_dir / 'mcp_config.json').read_text()).get('mcpServers', {})
+        if excluded & set(agy_mcp):
+            raise RuntimeError('Excluded MCP servers remain configured in Antigravity.')
+        for name in managed:
+            entry = agy_mcp[name]
+            if not os.path.isabs(entry['command']) or not os.access(entry['command'], os.X_OK):
+                raise RuntimeError(f'Missing Antigravity MCP executable for {name}')
+        agy_headroom = agy_mcp['headroom'].get('env', {})
+        if agy_headroom.get('HEADROOM_MODE') != 'token' or agy_headroom.get('HEADROOM_SAVINGS_PROFILE') != 'balanced':
+            raise RuntimeError('Antigravity Headroom token mode must use the balanced profile.')
+        if agy_headroom.get('HEADROOM_MCP_READ') != 'on':
+            raise RuntimeError('Antigravity Headroom file read cache must be enabled.')
+        agy_rules = plugin_dir / 'rules/AGENTS.md'
+        if not agy_rules.is_file() or agy_rules.stat().st_size > AGY_RULE_MAX_BYTES:
+            raise RuntimeError('Antigravity plugin AGENTS.md is missing or exceeds 24 KB rule budget.')
+        if state.get('mem0_install') == 'configured':
+            agy_hooks = json.loads((plugin_dir / 'hooks.json').read_text()).get('codex-toolkit-mem0', {})
+            for event in ('SessionStart', 'Stop'):
+                if not agy_hooks.get(event):
+                    raise RuntimeError(f'Missing Antigravity Mem0 hook for {event}')
     print('PASS: TOML, managed MCP executable paths, global instruction size.')
     for key in ['mem0_install', 'headroom_runtime']:
         print(f'{key}: {state.get(key, "not completed")}')
@@ -673,15 +786,18 @@ def validate():
 
 def final_status():
     """Print the MCP configuration that setup has just validated."""
-    if read_state().get('headroom_runtime') != 'mcp-only':
+    state = read_state()
+    if state.get('headroom_runtime') != 'mcp-only':
         raise RuntimeError('Headroom is not configured for MCP-only operation.')
     doc = config()
     for name in ['serena', 'headroom', 'mem0']:
         enabled = doc['mcp_servers'][name].get('enabled', True)
         print(f"MCP {name}: {'enabled' if enabled else 'disabled'}")
-    hardware = read_state().get('headroom_hardware', {})
+    hardware = state.get('headroom_hardware', {})
     print(f"Headroom: MCP-only, token mode, balanced profile; backend={hardware.get('backend', 'onnx_cpu')}, read cache enabled.")
     print('Excluded MCPs: graft, kubernetes, context7.')
+    if state.get('agy_plugin_configured'):
+        print('Antigravity plugin codex-toolkit: enabled (MCP serena/headroom/mem0, rules, Mem0 hooks).')
 
 
 def mcp_probe(name, entry, workdir, stderr=subprocess.DEVNULL):

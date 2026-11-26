@@ -24,7 +24,7 @@ note() { printf '\n%s\n' "$*"; }
 usage() {
   cat <<'EOF'
 Usage: bash setup.sh [--resume] | bash setup.sh --llm
-Default: preserve ~/.codex, install/update Codex and configure toolkit tools and Superpowers.
+Default: preserve ~/.codex, install/update Codex and Antigravity CLI (agy), and configure toolkit tools and Superpowers.
 --resume: rerun setup with the same data-preserving behavior.
 Tool policy: prefer an equivalent command-line tool, with Headroom, Serena and Mem0 available.
 --llm: validate and save inference/embedding providers and primary/secondary connections.
@@ -46,7 +46,7 @@ configure_llm() {
   acquire_lock
   CT_STAGE=llm-settings
   "$CT_PY" "$SCRIPT_DIR/lib/configure.py" llm-settings
-  note 'Model API settings saved. Restart Mem0/Codex to load the settings.'
+  note 'Model API settings saved. Restart Mem0/Codex/Antigravity to load the settings.'
 }
 build_tools_available() {
   command -v make >/dev/null \
@@ -196,12 +196,16 @@ snapshot_configuration() {
   for ct_file in config.toml AGENTS.md hooks.json; do
     if [ -f "$CT_HOME/$ct_file" ]; then cp -p "$CT_HOME/$ct_file" "$CT_BACKUP/"; fi
   done
+  if [ -d "$HOME/.gemini/config/plugins/codex-toolkit" ]; then
+    cp -Rp "$HOME/.gemini/config/plugins/codex-toolkit" "$CT_BACKUP/agy-codex-toolkit"
+  fi
   if [ -f "$CT_ROOT/install-state.json" ]; then cp -p "$CT_ROOT/install-state.json" "$CT_BACKUP/"; fi
   if [ -f "$CT_ROOT/npm/package-lock.json" ]; then cp "$CT_ROOT/npm/package-lock.json" "$CT_BACKUP/"; fi
 }
 install_packages() {
   CT_STAGE=packages
   install_codex
+  install_agy
   # Official Python packages; isolated from the user's other uv tools.
   "$CT_UV" tool install --upgrade --python "$CT_BOOT_PY" serena-agent
   ct_headroom_hardware=$("$CT_PY" "$SCRIPT_DIR/lib/headroom_setup.py" install "$CT_BOOT_PY" "$CT_UV" "$CT_ROOT")
@@ -231,6 +235,31 @@ install_codex() {
   [ -x "$CT_CODEX" ] || die "Native Codex binary is missing: $CT_CODEX"
   export CT_CODEX
   "$CT_CODEX" --version
+}
+install_agy() {
+  note 'Installing/updating Antigravity CLI with the official native installer.'
+  CT_AGY="$HOME/.local/bin/agy"
+  local ct_agy_added=0 ct_stage
+  if [ ! -e "$CT_AGY" ] && [ ! -L "$CT_AGY" ]; then
+    ct_agy_added=1
+  fi
+  mkdir -p "$HOME/.local/bin"
+  ct_stage=$(mktemp -d "$HOME/.local/bin/.agy-install.XXXXXX")
+  if ! (
+    mkdir -p "$ct_stage/home" "$ct_stage/bin"
+    curl -fsSL https://antigravity.google/cli/install.sh | HOME="$ct_stage/home" bash -s -- --dir "$ct_stage/bin"
+  ) || [ ! -x "$ct_stage/bin/agy" ]; then
+    rm -rf "$ct_stage"
+    die "Native Antigravity CLI binary is missing: $CT_AGY"
+  fi
+  mv -f "$ct_stage/bin/agy" "$CT_AGY"
+  rm -rf "$ct_stage"
+  [ -x "$CT_AGY" ] || die "Native Antigravity CLI binary is missing: $CT_AGY"
+  export CT_AGY
+  "$CT_AGY" --version
+  if [ "$ct_agy_added" = 1 ] && [ -n "${CT_PY:-}" ] && [ -f "${SCRIPT_DIR:-}/lib/configure.py" ]; then
+    "$CT_PY" "$SCRIPT_DIR/lib/configure.py" status agy_installed true
+  fi
 }
 configure_core() {
   CT_STAGE=configuration
@@ -293,6 +322,23 @@ install_plugins() {
       'Then retry: codex plugin add superpowers@openai-curated-remote' \
       'Workspace plugin approval, if required, must be granted by your administrator.' >&2
   fi
+  if [ -n "${CT_AGY:-}" ]; then
+    note 'Installing Superpowers for Antigravity from the partner marketplace.'
+    ct_agy_plugin_status=pending-login
+    if ct_agy_plugins=$("$CT_AGY" plugin list --json 2>/dev/null) \
+      && printf '%s\n' "$ct_agy_plugins" | "$CT_PY" -c 'import json, sys; data = json.load(sys.stdin); items = data if isinstance(data, list) else data.get("plugins", data.get("installed", [])); sys.exit(0 if any(isinstance(p, dict) and p.get("name") == "superpowers" for p in items) else 1)' 2>/dev/null; then
+      ct_agy_plugin_status=installed
+    elif "$CT_AGY" plugin install superpowers@antigravity-plugins-partners; then
+      ct_agy_plugin_status=installed
+      "$CT_PY" "$SCRIPT_DIR/lib/configure.py" status agy_superpowers_owned true
+    fi
+    "$CT_PY" "$SCRIPT_DIR/lib/configure.py" status agy_superpowers_install "$ct_agy_plugin_status"
+    if [ "$ct_agy_plugin_status" != installed ]; then
+      printf '%s\n' \
+        "Antigravity Superpowers is $ct_agy_plugin_status; codex-toolkit plugin remains active." \
+        'Sign in with agy and retry: agy plugin install superpowers@antigravity-plugins-partners' >&2
+    fi
+  fi
 }
 finish() {
   CT_STAGE=verification
@@ -300,15 +346,18 @@ finish() {
   "$CT_PY" "$SCRIPT_DIR/lib/configure.py" doctor
   "$CT_PY" "$SCRIPT_DIR/lib/configure.py" final-status
   "$CT_CODEX" mcp list
+  if [ -n "${CT_AGY:-}" ] && [ -x "$CT_AGY" ] && [ -d "$HOME/.gemini/config/plugins/codex-toolkit" ]; then
+    "$CT_AGY" plugin validate "$HOME/.gemini/config/plugins/codex-toolkit"
+  fi
   if [ "$CT_FAILURES" -gt 0 ]; then
     printf 'Partial setup: %s stage(s) incomplete. Follow the reported recovery commands or rerun bash setup.sh --resume.\n' "$CT_FAILURES" >&2
     exit 1
   fi
   note 'Install/configuration pass finished. The MCP status above is the final setup check.'
   printf '%s\n' \
-    'Open a new terminal (or restart VS Code). Login status: codex login status' \
-    'Run codex and start a new thread; Mem0 is available through /mcp.' \
-    'Review and trust the Mem0 SessionStart/Stop/SessionEnd hooks in /hooks to save memory after each completed request.' \
+    'Open a new terminal (or restart VS Code / Antigravity). Login status: codex login status' \
+    'Run codex or agy and start a new thread; Mem0 is available through /mcp.' \
+    'Review and trust the Mem0 SessionStart/Stop/SessionEnd hooks in Codex /hooks; Antigravity loads plugin hooks automatically.' \
     'MCP visibility: /mcp. Connection test: ~/.codex/toolkit/bin/codex-doctor' \
     'Update later: bash ~/.codex/toolkit/bundle/update.sh'
 }

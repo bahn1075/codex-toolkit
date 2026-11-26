@@ -16,6 +16,9 @@ def test_setup_preserves_existing_home(*options):
         (codex / 'sessions' / 'conversation.jsonl').write_text('conversation')
         (codex / 'auth.json').write_text('login')
         (codex / 'config.toml').write_text('user settings')
+        agy_plugin = home / '.gemini/config/plugins/codex-toolkit'
+        agy_plugin.mkdir(parents=True)
+        (agy_plugin / 'plugin.json').write_text('{"name":"codex-toolkit"}\n')
         (root / 'setup.sh').write_text((source / 'setup.sh').read_text())
         (root / 'lib').mkdir()
         (root / 'lib/toolkit.sh').write_text(
@@ -23,7 +26,7 @@ def test_setup_preserves_existing_home(*options):
             'preflight() { echo "$*" > "$HOME/preflight-args"; }\nacquire_lock() { :; }\n'
             'remove_homebrew_codex() { :; }\nnpm() { return 1; }\n'
             'bootstrap() { mkdir -p "$CT_ROOT"; echo "{}" > "$CT_ROOT/install-state.json"; }\n'
-            'install_packages() { mkdir -p "$HOME/.local/bin"; echo updated > "$HOME/.local/bin/codex"; }\n'
+            'install_packages() { mkdir -p "$HOME/.local/bin"; echo updated > "$HOME/.local/bin/codex"; echo updated-agy > "$HOME/.local/bin/agy"; }\n'
             'install_mem0() { echo prompted > "$HOME/model-settings-called"; }\n'
             'configure_core() { echo "$*" > "$HOME/core-args"; }\n'
             + ''.join(name + '() { :; }\n' for name in (
@@ -37,7 +40,10 @@ def test_setup_preserves_existing_home(*options):
         assert (codex / 'config.toml').read_text() == 'user settings'
         backups = list((home / '.codex-backups').glob('update-*/config.toml'))
         assert len(backups) == 1 and backups[0].read_text() == 'user settings'
+        agy_backups = list((home / '.codex-backups').glob('update-*/agy-codex-toolkit/plugin.json'))
+        assert len(agy_backups) == 1 and '"codex-toolkit"' in agy_backups[0].read_text()
         assert (home / '.local/bin/codex').read_text().strip() == 'updated'
+        assert (home / '.local/bin/agy').read_text().strip() == 'updated-agy'
         assert (home / 'model-settings-called').read_text().strip() == 'prompted'
         assert (home / 'core-args').read_text().strip() == ''
         assert (home / 'preflight-args').read_text().strip() == '--stop-codex'

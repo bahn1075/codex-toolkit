@@ -76,6 +76,37 @@ def uninstall(home, dry_run=False):
         commands.append([str(native_link), 'plugin', 'remove', plugin])
         if plugin in doc.get('plugins', {}):
             del doc['plugins'][plugin]
+    agy_link = home / '.local/bin/agy'
+    agy_owned = state.get('agy_installed') in (True, 'true') and state.get('agy') in (None, str(agy_link))
+    if state.get('agy_superpowers_owned') in (True, 'true') and os.access(agy_link, os.X_OK):
+        agy_listing = subprocess.run([str(agy_link), 'plugin', 'list', '--json'],
+                                     check=False, capture_output=True, text=True, timeout=30)
+        agy_sp_installed = True
+        if agy_listing.returncode == 0:
+            try:
+                parsed_list = json.loads(agy_listing.stdout)
+                items = parsed_list if isinstance(parsed_list, list) else parsed_list.get(
+                    'plugins', parsed_list.get('installed', []))
+                agy_sp_installed = any(isinstance(p, dict) and p.get('name') == 'superpowers' for p in items)
+            except json.JSONDecodeError:
+                agy_sp_installed = True
+        if agy_sp_installed:
+            commands.append([str(agy_link), 'plugin', 'uninstall', 'superpowers'])
+    agy_plugin = home / '.gemini/config/plugins/codex-toolkit'
+    agy_plugin_owned = state.get('agy_plugin_configured') in (True, 'true')
+    if not agy_plugin_owned and (agy_plugin / 'mcp_config.json').is_file() and not agy_plugin.is_symlink():
+        try:
+            agy_plugin_owned = str(root) in (agy_plugin / 'mcp_config.json').read_text()
+        except OSError:
+            pass
+    if agy_plugin_owned or agy_plugin.is_symlink():
+        for parent in (home / '.gemini', home / '.gemini/config', home / '.gemini/config/plugins'):
+            if parent.is_symlink():
+                raise RuntimeError('Refusing a symlinked Antigravity config directory')
+        if agy_plugin.exists() and not agy_plugin.is_symlink():
+            backup_files.append(agy_plugin)
+        if agy_plugin.exists() or agy_plugin.is_symlink():
+            deletions.append(agy_plugin)
     if config_path.exists():
         updates.append((config_path, tomlkit.dumps(doc)))
     agents = codex / 'AGENTS.md'
@@ -124,6 +155,11 @@ def uninstall(home, dry_run=False):
         deletions.extend((native_link, native_packages))
     elif state.get('codex'):
         print('Preserving Codex binary outside the managed native installation.')
+    if agy_owned:
+        if agy_link.is_symlink() or agy_link.is_file():
+            deletions.append(agy_link)
+    elif state.get('agy'):
+        print('Preserving Antigravity CLI binary outside the managed installation.')
     for path in (codex / 'mem0.json', codex / 'previous-home.txt', root / 'mem0-sessions'):
         if path.exists():
             backup_files.append(path)

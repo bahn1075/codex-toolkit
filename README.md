@@ -1,7 +1,7 @@
 # Codex Toolkit
 
-macOS와 Linux에서 Codex CLI·VS Code 확장과 개발용 MCP를 한 번에 설치하고,
-`~/.codex`의 공통 설정을 관리하는 개인용 설치 번들입니다.
+macOS와 Linux에서 Codex CLI·VS Code 확장·Antigravity(`agy` CLI 및 Antigravity 앱/IDE)와 개발용 MCP를 한 번에 설치하고,
+`~/.codex` 및 `~/.gemini/config/plugins/codex-toolkit`의 공통 설정을 관리하는 개인용 설치 번들입니다.
 
 ## 디렉터리 구조
 
@@ -17,9 +17,9 @@ macOS와 Linux에서 Codex CLI·VS Code 확장과 개발용 MCP를 한 번에 �
 
 | 구분 | 구성 요소 |
 |---|---|
-| Codex | 공식 native Codex CLI, VS Code `openai.chatgpt` 확장 |
+| 에이전트 CLI·확장 | 공식 native Codex CLI(`~/.local/bin/codex`), 공식 Antigravity CLI(`~/.local/bin/agy`), VS Code `openai.chatgpt` 확장 |
 | MCP | Serena, Headroom, Mem0 (Graft는 설치·등록 대상에서 제외) |
-| 지침·플러그인 | Ponytail 지침, Superpowers 플러그인 |
+| 지침·플러그인 | Ponytail 지침, Antigravity 전역 `codex-toolkit` 플러그인(MCP·규칙·Mem0 hook 통합), Superpowers 플러그인 |
 | 편의 명령 | `codex-update`, `codex-doctor`, `mem0-import` |
 
 Mem0는 Oracle AI Vector Search와 사용자가 지정한 추론·임베딩 API를 사용합니다.
@@ -57,18 +57,18 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 | `bash setup.sh --resume` | 기존 `~/.codex`를 유지하면서 실패·누락된 설치와 설정을 다시 맞춤 |
 | `bash update.sh` | 설치된 툴킷과 패키지를 업데이트하고 설정을 재적용 |
 | `bash remove.sh --dry-run` | 삭제 대상과 실행할 제거 명령만 확인 |
-| `bash remove.sh` | toolkit 구성요소·Codex native CLI와 설정 연동 제거 |
+| `bash remove.sh` | toolkit 구성요소·Codex/Antigravity CLI와 설정 연동 제거 |
 | `bash setup.sh --help` | 지원 옵션과 환경 변수 확인 |
 
 `setup.sh`와 `update.sh`는 다음 작업을 순서대로 수행합니다.
 
 1. 운영체제, 필수 명령과 실행 중인 Codex 프로세스를 검사합니다.
-2. 공식 native installer로 Codex를 설치하거나 업데이트하고(기존 Homebrew Codex formula/cask는 제거), MCP 의존성과 등록된 Serena 프로젝트의 언어 서버를 다시 맞춥니다.
-3. `~/.codex/config.toml`, 전역 `AGENTS.md`, shell alias를 구성합니다.
-4. Mem0 연결 정보와 hook, Headroom의 token/balanced MCP 모드를 구성합니다. Superpowers 설치 전에 로그인을 확인하며, 대화형 터미널에서 필요하면 ChatGPT 로그인을 진행합니다.
-5. 설정 유효성과 모든 활성 MCP의 실제 시작·도구 목록 및 최종 상태를 검사합니다.
+2. 공식 native installer로 Codex(`~/.local/bin/codex`)와 Antigravity CLI(`~/.local/bin/agy`)를 설치하거나 업데이트하고(기존 Homebrew Codex formula/cask는 제거), MCP 의존성과 등록된 Serena 프로젝트의 언어 서버를 다시 맞춥니다.
+3. `~/.codex/config.toml`, 전역 `AGENTS.md`, shell alias와 Antigravity 전역 플러그인(`~/.gemini/config/plugins/codex-toolkit/`의 `plugin.json`, `mcp_config.json`, `rules/AGENTS.md`)을 구성합니다.
+4. Mem0 연결 정보와 Codex·Antigravity(`SessionStart`/`Stop`) hook, Headroom의 token/balanced MCP 모드를 구성합니다. Superpowers는 Codex(`superpowers@openai-curated-remote`)와 Antigravity(`superpowers@antigravity-plugins-partners`)에 각각 설치합니다.
+5. 설정 유효성, 모든 활성 MCP의 실제 시작·도구 목록, Antigravity 플러그인 검증(`agy plugin validate`) 및 최종 상태를 검사합니다.
 
-Codex native CLI는 기본적으로 `~/.local/bin/codex`에 설치됩니다.
+Codex native CLI는 `~/.local/bin/codex`, Antigravity CLI는 `~/.local/bin/agy`에 설치됩니다.
 
 ### 기본 도구 정책
 

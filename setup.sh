@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# macOS Bash 3.2+ and Linux. Installs Serena, Headroom, Mem0 and Ponytail; excludes Graft.
+# macOS Bash 3.2+ and Linux. Installs Codex, Antigravity CLI, Serena, Headroom, Mem0 and Ponytail; excludes Graft.
 # Run as the ordinary login user, outside ~/.codex. Remove with: bash remove.sh
 set -Eeuo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)

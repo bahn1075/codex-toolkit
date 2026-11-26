@@ -223,6 +223,86 @@ with tempfile.TemporaryDirectory() as tmp:
             assert systemctl.call_count == 1, 'Only probe when the user manager is unavailable'
             assert not (units_home / '.config/systemd/user').exists()
 
+        agy_home = home / 'agy-user'
+        (agy_home / '.gemini/antigravity').mkdir(parents=True)
+        with patch.object(c, 'HOME', agy_home), patch.object(c, 'CODEX', agy_home / '.codex'), \
+                patch.object(c, 'ROOT', agy_home / '.codex/toolkit'):
+            systemctl.return_value.returncode = 1
+            c.configure_mem0_hooks()
+            agy_hooks_path = agy_home / '.gemini/config/plugins/codex-toolkit/hooks.json'
+            first_agy = agy_hooks_path.read_text()
+            c.configure_mem0_hooks()
+            assert agy_hooks_path.read_text() == first_agy
+            agy_configured = json.loads(first_agy)['codex-toolkit-mem0']
+            for hook_event in ('SessionStart', 'Stop'):
+                assert agy_configured[hook_event] == [
+                    {'type': 'command', 'command': '/tools/mem0-session', 'timeout': 3}]
+
+    # Exercise Antigravity hook contract and full-transcript task extraction.
+    agy_root = home / 'agy-env'
+    agy_codex = agy_root / '.codex'
+    agy_state = agy_codex / 'toolkit/mem0-sessions'
+    agy_session = str(uuid.uuid4())
+    agy_logs = agy_root / '.gemini/antigravity/brain' / agy_session / '.system_generated/logs'
+    agy_logs.mkdir(parents=True)
+    agy_compact = agy_logs / 'transcript.jsonl'
+    agy_full = agy_logs / 'transcript_full.jsonl'
+    agy_records = [
+        {'step_index': 0, 'source': 'USER_EXPLICIT', 'type': 'USER_INPUT', 'status': 'DONE',
+         'content': '<USER_REQUEST>\nAGY hook 설정 검토해줘\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nmeta\n</ADDITIONAL_METADATA>'},
+        {'step_index': 1, 'source': 'MODEL', 'type': 'PLANNER_RESPONSE', 'status': 'DONE',
+         'thinking': 'private thought',
+         'tool_calls': [{'name': 'read_file', 'args': {'Path': '/app/setup.sh', 'secret': 's3cr3t'}}]},
+        {'step_index': 2, 'source': 'MODEL', 'type': 'GENERIC', 'status': 'DONE',
+         'content': 'Showing setup.sh\n\nThe following is a <SYSTEM_MESSAGE>reminder</SYSTEM_MESSAGE>'},
+        {'step_index': 3, 'source': 'MODEL', 'type': 'PLANNER_RESPONSE', 'status': 'DONE',
+         'content': 'AGY 플러그인과 hook 연동이 가능합니다.'},
+    ]
+    agy_compact.write_text(json.dumps({**agy_records[0], 'content': 'truncated'}) + '\n')
+    agy_full.write_text(''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in agy_records))
+    agy_store = Store()
+    agy_seen = []
+    with patch.object(s, 'HOME', agy_codex), patch.object(s, 'STATE', agy_state), \
+            patch.object(s.subprocess, 'Popen') as spawn, \
+            patch.object(s, 'extract_task_memories', side_effect=lambda st, msgs, previous=None, **kw: (
+                agy_seen.append(msgs) or [{'text': msgs[0]['content'] + ' -> ' + msgs[-1]['content']}])):
+        s.enqueue({'hookEventName': 'Stop', 'conversationId': agy_session,
+                   'transcriptPath': str(agy_compact)})
+        assert spawn.called
+        agy_job = next(agy_state.glob('*.job.json'))
+        assert json.loads(agy_job.read_text())['path'] == str(agy_full.resolve())
+        agy_stats = s.process_job(agy_job, lambda: agy_store, state_dir=agy_state)
+        assert agy_stats['inserted'] == 1
+        assert agy_seen[0][0] == {'role': 'user', 'content': 'AGY hook 설정 검토해줘'}
+        assert agy_seen[0][-1] == {'role': 'final', 'content': 'AGY 플러그인과 hook 연동이 가능합니다.'}
+        assert 's3cr3t' not in json.dumps(agy_seen[0], ensure_ascii=False)
+        assert 'SYSTEM_MESSAGE' not in json.dumps(agy_seen[0], ensure_ascii=False)
+        assert 'private thought' not in json.dumps(agy_seen[0], ensure_ascii=False)
+        # Repeated Stop must be a no-op.
+        s.enqueue({'hookEventName': 'Stop', 'conversationId': agy_session,
+                   'transcriptPath': str(agy_compact)})
+        assert s.process_job(next(agy_state.glob('*.job.json')), lambda: agy_store, state_dir=agy_state)['inserted'] == 0
+        # Reject transcripts outside Antigravity directories.
+        outside = home / 'outside.jsonl'
+        outside.write_text('{}\n')
+        try:
+            s.enqueue({'hookEventName': 'Stop', 'conversationId': agy_session,
+                       'transcriptPath': str(outside)})
+            raise AssertionError('Expected outside Antigravity path rejection')
+        except ValueError:
+            pass
+
+    for event_name, expected_out in (('SessionStart', {}), ('Stop', {'decision': 'allow'})):
+        agy_out = io.StringIO()
+        with patch.object(Path, 'home', return_value=agy_root), \
+                patch.object(sys, 'argv', ['mem0_session.py']), \
+                patch.object(sys, 'stdin', io.StringIO(json.dumps({
+                    'hookEventName': event_name, 'conversationId': agy_session,
+                    'transcriptPath': str(agy_compact)}))), \
+                patch.object(s.subprocess, 'Popen'), contextlib.redirect_stdout(agy_out):
+            runpy.run_path(str(Path(s.__file__)), run_name='__main__')
+        assert json.loads(agy_out.getvalue()) == expected_out
+
 assert 'ctx7sk-' not in s.redact('ctx7sk-' + 'a' * 36)
 assert 'hunter2' not in s.redact('password=hunter2')
 with patch.object(m, 'memory') as factory:

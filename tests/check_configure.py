@@ -211,6 +211,7 @@ git() {
   esac
 }
 install_codex() { :; }
+install_agy() { :; }
 SCRIPT_DIR=$1
 CT_ROOT=$2
 CT_BREW=mock_brew
@@ -255,6 +256,49 @@ printf 'CODEX=%s\n' "$CT_CODEX"
     assert 'uninstall --formula codex' in result.stdout
     assert 'uninstall --cask codex' in result.stdout
     assert f'CODEX={home}/.local/bin/codex' in result.stdout
+
+for pre_existing in (False, True):
+    with tempfile.TemporaryDirectory() as tmp:
+        home = Path(tmp) / 'home'
+        (home / '.local/bin').mkdir(parents=True)
+        if pre_existing:
+            (home / '.local/bin/agy').write_text('#!/bin/sh\necho old-agy\n')
+            (home / '.local/bin/agy').chmod(0o755)
+        bundle = Path(tmp) / 'bundle'
+        (bundle / 'lib').mkdir(parents=True)
+        (bundle / 'lib/configure.py').write_text('')
+        result = subprocess.run(['bash', '-c', r'''
+set -Eeuo pipefail
+source "$1/lib/toolkit.sh"
+curl() {
+  cat <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+target=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -d|--dir) target="$2"; shift ;;
+  esac
+  shift
+done
+if [ -f "$target/agy" ]; then exit 0; fi
+mkdir -p "$target"
+printf '#!/bin/sh\necho updated-agy-1.0\n' > "$target/agy"
+chmod +x "$target/agy"
+SCRIPT
+}
+mock_python() { printf 'STATE %s\n' "$*"; }
+SCRIPT_DIR=$2
+CT_PY=mock_python
+install_agy
+printf 'AGY=%s\n' "$CT_AGY"
+''', 'check', str(ROOT), str(bundle)], env={**__import__('os').environ, 'HOME': str(home)},
+            capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert 'updated-agy-1.0' in result.stdout
+        assert f'AGY={home}/.local/bin/agy' in result.stdout
+        assert ('status agy_installed true' in result.stdout) == (not pre_existing)
+        assert not list((home / '.local/bin').glob('.agy-install.*'))
 
 with tempfile.TemporaryDirectory() as tmp:
     wallet = Path(tmp) / 'wallet'; wallet.mkdir()
@@ -463,7 +507,9 @@ with tempfile.TemporaryDirectory() as tmp:
         c.save_config(doc)
         c.write(c.CODEX / 'AGENTS.md',
                 'User notes\n<!-- BEGIN CODEX-TOOLKIT -->\n## MCP first\n<!-- END CODEX-TOOLKIT -->\n')
-        c.configure()
+        (home / '.gemini/antigravity').mkdir(parents=True)
+        with patch.dict(c.os.environ, CT_AGY=str(home / '.local/bin/agy')):
+            c.configure()
         cli_first_doc = c.config()
         assert set(cli_first_doc['mcp_servers']) == {'serena', 'headroom', 'mem0', 'custom'}
         assert all(server['enabled'] is True for server in cli_first_doc['mcp_servers'].values())
@@ -474,6 +520,27 @@ with tempfile.TemporaryDirectory() as tmp:
         assert 'User notes' in instructions
         assert '`command -v`' in instructions and '`--help`' in instructions
         assert all(name in instructions for name in ('aws', 'kubectl', 'Headroom', 'Serena', 'Mem0'))
+        agy_dir = home / '.gemini/config/plugins/codex-toolkit'
+        assert json.loads((agy_dir / 'plugin.json').read_text())['name'] == 'codex-toolkit'
+        agy_mcp = json.loads((agy_dir / 'mcp_config.json').read_text())['mcpServers']
+        assert set(agy_mcp) == {'serena', 'headroom', 'mem0'}
+        assert agy_mcp['headroom']['env']['HEADROOM_MODE'] == 'token'
+        assert agy_mcp['headroom']['env']['HEADROOM_SAVINGS_PROFILE'] == 'balanced'
+        assert agy_mcp['headroom']['env']['HEADROOM_MCP_READ'] == 'on'
+        agy_rules = (agy_dir / 'rules/AGENTS.md').read_text()
+        assert 'CLI first' in agy_rules and 'Ponytail instructions' in agy_rules
+        assert 'alias agy=' in (root / 'shell-init.sh').read_text()
+        with patch.object(c.os, 'access', return_value=True), contextlib.redirect_stdout(io.StringIO()):
+            c.validate()
+        (agy_dir / 'rules/AGENTS.md').write_text('x' * 24001)
+        with patch.object(c.os, 'access', return_value=True), contextlib.redirect_stdout(io.StringIO()):
+            try:
+                c.validate()
+            except RuntimeError as exc:
+                assert '24 KB' in str(exc)
+            else:
+                raise AssertionError('Antigravity rule size limit must be enforced')
+        c.configure()
 
         for entry in cli_first_doc['mcp_servers'].values():
             entry['enabled'] = False
@@ -484,4 +551,4 @@ with tempfile.TemporaryDirectory() as tmp:
         assert all(migrated[name]['enabled'] is True for name in ('serena', 'headroom', 'mem0'))
         assert migrated['custom']['enabled'] is False
         assert 'cli_only' not in c.read_state()
-print('PASS: real config migration, Headroom read cache and default CLI-first policy.')
+print('PASS: real config migration, Headroom read cache, Antigravity plugin and default CLI-first policy.')

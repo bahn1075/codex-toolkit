@@ -18,6 +18,7 @@ HOME = Path.home() / '.codex'
 STATE = HOME / 'toolkit/mem0-sessions'
 MAX_TEXT = 12000
 MIN_CHUNK = 1500
+AGY_SURFACES = ('antigravity', 'antigravity-cli', 'antigravity-ide')
 
 
 def write_json(path, value):
@@ -79,29 +80,100 @@ def transcript_hash(path, end):
     return digest.hexdigest()
 
 
+def parse_hook_event(event):
+    if 'hook_event_name' in event:
+        return {
+            'source': 'codex',
+            'hook_event_name': event.get('hook_event_name'),
+            'session_id': event.get('session_id'),
+            'transcript_path': event.get('transcript_path'),
+            'workspace_paths': (),
+        }
+    if 'hookEventName' in event:
+        workspaces = event.get('workspacePaths') or ()
+        if not isinstance(workspaces, list):
+            workspaces = ()
+        return {
+            'source': 'antigravity',
+            'hook_event_name': event.get('hookEventName'),
+            'session_id': event.get('conversationId') or event.get('sessionId'),
+            'transcript_path': event.get('transcriptPath'),
+            'workspace_paths': tuple(w for w in workspaces if isinstance(w, str) and os.path.isabs(w)),
+        }
+    raise ValueError('Expected SessionStart, Stop or SessionEnd')
+
+
+def antigravity_roots(workspace_paths=()):
+    gemini_home = HOME.parent / '.gemini'
+    roots = [gemini_home / surface for surface in AGY_SURFACES]
+    for workspace in workspace_paths:
+        ws_gemini = Path(workspace) / '.gemini'
+        roots.extend(ws_gemini / surface for surface in AGY_SURFACES)
+    return roots
+
+
 def enqueue(event):
-    if event.get('hook_event_name') not in ('SessionStart', 'Stop', 'SessionEnd'):
+    parsed = parse_hook_event(event)
+    hook_name = parsed['hook_event_name']
+    if hook_name not in ('SessionStart', 'Stop', 'SessionEnd'):
         raise ValueError('Expected SessionStart, Stop or SessionEnd')
-    if event['hook_event_name'] in ('Stop', 'SessionEnd'):
+    if hook_name in ('Stop', 'SessionEnd'):
         STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-        session = str(uuid.UUID(event['session_id']))
-        if not event.get('transcript_path'):
-            raise ValueError(f"{event['hook_event_name']} has no transcript_path")
-        path = Path(event['transcript_path']).resolve(strict=True)
-        roots = (HOME / 'sessions', HOME / 'archived_sessions')
-        if not any(path.is_relative_to(root.resolve()) for root in roots):
-            raise ValueError('Transcript is outside Codex session directories')
-        # Only enqueue complete JSONL records; a later Stop/SessionEnd picks up a partial tail.
-        end = complete_end(path)
-        if not end:
-            raise ValueError('Transcript contains no complete records')
-        job = STATE / f'{session}-{end:020d}.job.json'
-        if not job.exists():
-            snapshot_hash = transcript_hash(path, end)
-            if snapshot_hash is None:
-                raise ValueError('Transcript changed while enqueueing; retry after the next Stop or SessionEnd')
-            write_json(job, {'session': session, 'path': str(path), 'end': end,
-                             'sha256': snapshot_hash})
+        session = str(uuid.UUID(parsed['session_id']))
+        if parsed['source'] == 'antigravity':
+            raw_transcript = parsed['transcript_path']
+            roots = antigravity_roots(parsed['workspace_paths'])
+            if not raw_transcript:
+                candidates = [
+                    root / 'brain' / session / '.system_generated/logs/transcript_full.jsonl'
+                    for root in roots
+                ] + [
+                    root / 'brain' / session / '.system_generated/logs/transcript.jsonl'
+                    for root in roots
+                ]
+                found = next((c for c in candidates if c.is_file() and not c.is_symlink()), None)
+                raw_transcript = str(found) if found else None
+            if raw_transcript:
+                candidate = Path(raw_transcript)
+                if not candidate.exists():
+                    resolved_parent = candidate.parent.resolve()
+                    if not any(resolved_parent.is_relative_to(root.resolve()) for root in roots):
+                        raise ValueError('Transcript is outside Antigravity session directories')
+                else:
+                    path = candidate.resolve(strict=True)
+                    if not any(path.is_relative_to(root.resolve()) for root in roots):
+                        raise ValueError('Transcript is outside Antigravity session directories')
+                    if path.name == 'transcript.jsonl':
+                        full_path = path.with_name('transcript_full.jsonl')
+                        if full_path.is_file() and not full_path.is_symlink() and full_path.stat().st_size > 0:
+                            path = full_path.resolve(strict=True)
+                    end = complete_end(path)
+                    if end:
+                        job = STATE / f'{session}-{end:020d}.job.json'
+                        if not job.exists():
+                            snapshot_hash = transcript_hash(path, end)
+                            if snapshot_hash is None:
+                                raise ValueError('Transcript changed while enqueueing; retry after the next Stop')
+                            write_json(job, {'session': session, 'path': str(path), 'end': end,
+                                             'sha256': snapshot_hash, 'format': 'antigravity'})
+        else:
+            if not parsed['transcript_path']:
+                raise ValueError(f'{hook_name} has no transcript_path')
+            path = Path(parsed['transcript_path']).resolve(strict=True)
+            roots = (HOME / 'sessions', HOME / 'archived_sessions')
+            if not any(path.is_relative_to(root.resolve()) for root in roots):
+                raise ValueError('Transcript is outside Codex session directories')
+            # Only enqueue complete JSONL records; a later Stop/SessionEnd picks up a partial tail.
+            end = complete_end(path)
+            if not end:
+                raise ValueError('Transcript contains no complete records')
+            job = STATE / f'{session}-{end:020d}.job.json'
+            if not job.exists():
+                snapshot_hash = transcript_hash(path, end)
+                if snapshot_hash is None:
+                    raise ValueError('Transcript changed while enqueueing; retry after the next Stop or SessionEnd')
+                write_json(job, {'session': session, 'path': str(path), 'end': end,
+                                 'sha256': snapshot_hash})
     if not any(STATE.glob('*.job.json')):
         return
     # No Mem0 imports or network I/O in the three-second hook window.
@@ -191,6 +263,79 @@ def task_message(record):
         return {'role': 'final' if payload.get('phase') in ('final', 'final_answer') else 'assistant',
                 'content': redact(payload.get('message', ''))}
     return None
+
+
+def clean_agy_user_content(text):
+    if not isinstance(text, str):
+        return ''
+    match = re.search(r'<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>', text, flags=re.S)
+    if match:
+        return match.group(1)
+    text = re.sub(
+        r'\n*<(?:ADDITIONAL_METADATA|USER_SETTINGS_CHANGE|SYSTEM_MESSAGE)>.*?</(?:ADDITIONAL_METADATA|USER_SETTINGS_CHANGE|SYSTEM_MESSAGE)>\s*',
+        '\n', text, flags=re.S)
+    return text.strip()
+
+
+def clean_agy_tool_content(text):
+    if not isinstance(text, str):
+        return text
+    text = re.sub(r'\n*The following is a <SYSTEM_MESSAGE>.*?</SYSTEM_MESSAGE>\s*', '', text, flags=re.S)
+    text = re.sub(r'<SYSTEM_MESSAGE>.*?</SYSTEM_MESSAGE>\s*', '', text, flags=re.S)
+    return text.strip()
+
+
+def agy_record_messages(record):
+    if not isinstance(record, dict):
+        return []
+    step_idx = record.get('step_index')
+    rec_type = record.get('type')
+    source = record.get('source')
+    if rec_type == 'USER_INPUT' or source == 'USER_EXPLICIT':
+        content = clean_agy_user_content(record.get('content', ''))
+        return [{'role': 'user', 'content': redact(content)}] if content else []
+    if rec_type == 'PLANNER_RESPONSE':
+        out = []
+        tool_calls = record.get('tool_calls') or []
+        content = record.get('content')
+        if isinstance(content, str) and content.strip():
+            out.append({'role': 'assistant' if tool_calls else 'final', 'content': redact(content)})
+        for index, call in enumerate(tool_calls):
+            if not isinstance(call, dict):
+                continue
+            call_id = call.get('id') or f'agy-step-{step_idx}-call-{index}'
+            out.append({
+                'role': 'tool',
+                'call_id': call_id,
+                'tool_phase': 'call',
+                'name': call.get('name'),
+                'content': evidence({
+                    'name': call.get('name'),
+                    'arguments': call.get('args') if 'args' in call else call.get('arguments'),
+                }),
+            })
+        return out
+    if rec_type in ('GENERIC', 'TOOL_RESPONSE', 'COMMAND_OUTPUT', 'MCP_TOOL_RESULT'):
+        raw_content = record.get('content')
+        if raw_content is None:
+            raw_content = record.get('output', record.get('result'))
+        cleaned = clean_agy_tool_content(raw_content) if isinstance(raw_content, str) else raw_content
+        if cleaned:
+            call_id = record.get('call_id') or f'agy-step-{step_idx}'
+            return [{
+                'role': 'tool',
+                'call_id': call_id,
+                'tool_phase': 'result',
+                'content': evidence(cleaned),
+            }]
+    return []
+
+
+def record_messages(record, fmt='codex'):
+    if fmt == 'antigravity':
+        return agy_record_messages(record)
+    msg = task_message(record)
+    return [msg] if msg else []
 
 
 def message_chunks(messages, limit, skip=0):
@@ -315,7 +460,7 @@ def extract_task_memories(store, messages, previous=None, progress_path=None):
     return progress['facts']
 
 
-def transcript_prefix(path, session, checkpoint):
+def transcript_prefix(path, session, checkpoint, fmt='codex'):
     """Relocate rewritten bytes only when the entire stored evidence prefix still matches."""
     offset = checkpoint.get('offset', 0)
     rewritten = bool(offset and transcript_hash(path, offset) != checkpoint['sha256'])
@@ -326,17 +471,22 @@ def transcript_prefix(path, session, checkpoint):
     def advance(raw):
         nonlocal count
         digest.update(raw)
-        message = task_message(json.loads(raw))
-        if message:
+        for message in record_messages(json.loads(raw), fmt):
             evidence_digest.update(json.dumps(message, sort_keys=True,
                 ensure_ascii=False, separators=(',', ':')).encode() + b'\n')
             count += 1
 
     with path.open('rb') as transcript:
         meta = json.loads(transcript.readline())
-        if meta.get('type') != 'session_meta' or (
-                meta['payload'].get('session_id') or meta['payload'].get('id')) != session:
-            raise ValueError('Transcript session identity mismatch')
+        if fmt == 'antigravity':
+            if not isinstance(meta, dict) or ('step_index' not in meta and 'source' not in meta):
+                raise ValueError('Transcript session identity mismatch')
+            if session not in path.parts and not path.name.startswith(session):
+                raise ValueError('Transcript session identity mismatch')
+        else:
+            if meta.get('type') != 'session_meta' or (
+                    meta['payload'].get('session_id') or meta['payload'].get('id')) != session:
+                raise ValueError('Transcript session identity mismatch')
         transcript.seek(0)
         if rewritten:
             target = checkpoint.get('evidence_count', 0)
@@ -351,7 +501,7 @@ def transcript_prefix(path, session, checkpoint):
                 if not raw:
                     raise ValueError('Transcript was truncated; checkpoint retained')
                 advance(raw)
-            if evidence_digest.hexdigest() != checkpoint.get('evidence_sha256'):
+            if count != target or evidence_digest.hexdigest() != checkpoint.get('evidence_sha256'):
                 raise ValueError('Transcript evidence changed; checkpoint retained')
         else:
             while transcript.tell() < offset:
@@ -364,9 +514,9 @@ def transcript_prefix(path, session, checkpoint):
     return cursor, digest, evidence_digest, rewritten
 
 
-def batches(path, session, checkpoint, end, include_valid_tail=False):
+def batches(path, session, checkpoint, end, include_valid_tail=False, fmt='codex'):
     """Yield each user request with its observed work once a new request or final arrives."""
-    checkpoint, digest, evidence_digest, rewritten = transcript_prefix(path, session, checkpoint)
+    checkpoint, digest, evidence_digest, rewritten = transcript_prefix(path, session, checkpoint, fmt=fmt)
     offset = checkpoint['offset']
     count = checkpoint['evidence_count']
     if rewritten:
@@ -385,34 +535,35 @@ def batches(path, session, checkpoint, end, include_valid_tail=False):
                 raise ValueError('Incomplete transcript record; retry after the next Stop or SessionEnd')
             record = json.loads(raw)
             digest.update(raw)
-            message = task_message(record)
-            if message:
+            extracted = record_messages(record, fmt)
+            for message in extracted:
                 evidence_digest.update(json.dumps(message, sort_keys=True,
                     ensure_ascii=False, separators=(',', ':')).encode() + b'\n')
                 count += 1
-            if message and message['content'].strip():
-                if message['role'] == 'user' and messages:
-                    if any(part['role'] == 'user' for part in messages):
-                        before['start_offset'] = start_offset
-                        yield messages, before
-                    messages = []
-                    seen_tools = set()
-                if not messages:
-                    start_offset = before['offset']
-                if message['role'] == 'tool' and message.get('call_id'):
-                    identity = (message['call_id'], message['tool_phase'])
-                    if identity in seen_tools:
-                        continue
-                    seen_tools.add(identity)
-                messages.append(message)
-                if message['role'] == 'final':
-                    if any(part['role'] == 'user' for part in messages):
-                        yield messages, {'offset': transcript.tell(), 'sha256': digest.hexdigest(),
-                                         'evidence_count': count,
-                                         'evidence_sha256': evidence_digest.hexdigest(),
-                                         'start_offset': start_offset}
-                    messages = []
-                    seen_tools = set()
+            for message in extracted:
+                if message and message['content'].strip():
+                    if message['role'] == 'user' and messages:
+                        if any(part['role'] == 'user' for part in messages):
+                            before['start_offset'] = start_offset
+                            yield messages, before
+                        messages = []
+                        seen_tools = set()
+                    if not messages:
+                        start_offset = before['offset']
+                    if message['role'] == 'tool' and message.get('call_id'):
+                        identity = (message['call_id'], message['tool_phase'])
+                        if identity in seen_tools:
+                            continue
+                        seen_tools.add(identity)
+                    messages.append(message)
+                    if message['role'] == 'final':
+                        if any(part['role'] == 'user' for part in messages):
+                            yield messages, {'offset': transcript.tell(), 'sha256': digest.hexdigest(),
+                                             'evidence_count': count,
+                                             'evidence_sha256': evidence_digest.hexdigest(),
+                                             'start_offset': start_offset}
+                        messages = []
+                        seen_tools = set()
 
 
 def process_job(job_path, store_factory=None, user_id='codex', state_dir=None, metadata=None):
@@ -420,6 +571,7 @@ def process_job(job_path, store_factory=None, user_id='codex', state_dir=None, m
     job = json.loads(job_path.read_text())
     stats = {'messages': 0, 'llm_calls': 0, 'inserted': 0, 'updated': 0}
     session = job['session']
+    fmt = job.get('format', 'codex')
     state_dir = Path(state_dir) if state_dir is not None else STATE
     state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     cursor_path = state_dir / f'{session}.cursor.json'
@@ -428,8 +580,13 @@ def process_job(job_path, store_factory=None, user_id='codex', state_dir=None, m
     progress_path = state_dir / f'{session}.summary.json'
     path = Path(job['path'])
     if not path.exists():
-        path = HOME / 'archived_sessions' / path.name
-    cursor, _, _, rewritten = transcript_prefix(path, session, cursor)
+        if fmt == 'antigravity':
+            fallback = path.with_name('transcript.jsonl')
+            if fallback.exists():
+                path = fallback
+        else:
+            path = HOME / 'archived_sessions' / path.name
+    cursor, _, _, rewritten = transcript_prefix(path, session, cursor, fmt=fmt)
     if rewritten or (job.get('sha256') and transcript_hash(path, job['end']) != job['sha256']):
         # Refresh captured jobs first: a crash leaves the old cursor able to retry this repair.
         queued = {queued: json.loads(queued.read_text())
@@ -455,7 +612,7 @@ def process_job(job_path, store_factory=None, user_id='codex', state_dir=None, m
         return stats
     store = None
     for messages, next_cursor in batches(path, session, cursor, job['end'],
-                                         job.get('include_valid_tail', False)):
+                                         job.get('include_valid_tail', False), fmt=fmt):
         if messages:
             stats['messages'] += len(messages)
             if store is None:
@@ -485,7 +642,9 @@ def process_job(job_path, store_factory=None, user_id='codex', state_dir=None, m
                 rows = store.get_all(filters=filters)['results']
                 if not rows:
                     result = store.add(fact['text'], user_id=user_id, infer=False,
-                                       metadata={**(metadata or {}), 'toolkit_fact_id': key,
+                                       metadata={**(metadata or {}),
+                                                 **({'agent_surface': 'antigravity'} if fmt == 'antigravity' else {}),
+                                                 'toolkit_fact_id': key,
                                                  'codex_session_id': session, 'memory_kind': 'task_outcome',
                                                  'codex_batch_id': batch_id,
                                                  'codex_chunk_index': index,
@@ -551,7 +710,12 @@ if __name__ == '__main__':
     elif not sys.argv[1:]:
         event = json.load(sys.stdin)
         enqueue(event)
-        if event['hook_event_name'] == 'Stop':
+        if 'hookEventName' in event:
+            if event['hookEventName'] == 'Stop':
+                print(json.dumps({'decision': 'allow'}))
+            else:
+                print('{}')
+        elif event.get('hook_event_name') == 'Stop':
             print('{}')
     else:
         raise SystemExit('Usage: mem0_session.py [--drain]')
