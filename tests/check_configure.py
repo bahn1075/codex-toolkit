@@ -257,12 +257,16 @@ printf 'CODEX=%s\n' "$CT_CODEX"
     assert 'uninstall --cask codex' in result.stdout
     assert f'CODEX={home}/.local/bin/codex' in result.stdout
 
-for pre_existing in (False, True):
+for pre_existing, native_update_ok in ((False, False), (True, True), (True, False)):
     with tempfile.TemporaryDirectory() as tmp:
         home = Path(tmp) / 'home'
         (home / '.local/bin').mkdir(parents=True)
         if pre_existing:
-            (home / '.local/bin/agy').write_text('#!/bin/sh\necho old-agy\n')
+            if native_update_ok:
+                (home / '.local/bin/agy').write_text(
+                    '#!/bin/sh\nif [ "${1:-}" = update ]; then echo self-updated; exit 0; fi\necho updated-agy-1.0\n')
+            else:
+                (home / '.local/bin/agy').write_text('#!/bin/sh\n[ "${1:-}" != update ]\n')
             (home / '.local/bin/agy').chmod(0o755)
         bundle = Path(tmp) / 'bundle'
         (bundle / 'lib').mkdir(parents=True)
@@ -274,7 +278,7 @@ curl() {
   cat <<'SCRIPT'
 #!/usr/bin/env bash
 set -euo pipefail
-target=""
+target="$HOME/.local/bin"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -d|--dir) target="$2"; shift ;;
@@ -296,6 +300,7 @@ printf 'AGY=%s\n' "$CT_AGY"
             capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
         assert 'updated-agy-1.0' in result.stdout
+        assert ('self-updated' in result.stdout) == (pre_existing and native_update_ok)
         assert f'AGY={home}/.local/bin/agy' in result.stdout
         assert ('status agy_installed true' in result.stdout) == (not pre_existing)
         assert not list((home / '.local/bin').glob('.agy-install.*'))

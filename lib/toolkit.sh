@@ -242,18 +242,20 @@ install_agy() {
   local ct_agy_added=0 ct_stage
   if [ ! -e "$CT_AGY" ] && [ ! -L "$CT_AGY" ]; then
     ct_agy_added=1
-  fi
-  mkdir -p "$HOME/.local/bin"
-  ct_stage=$(mktemp -d "$HOME/.local/bin/.agy-install.XXXXXX")
-  if ! (
-    mkdir -p "$ct_stage/home" "$ct_stage/bin"
-    curl -fsSL https://antigravity.google/cli/install.sh | HOME="$ct_stage/home" bash -s -- --dir "$ct_stage/bin"
-  ) || [ ! -x "$ct_stage/bin/agy" ]; then
+    curl -fsSL https://antigravity.google/cli/install.sh | bash
+  elif ! "$CT_AGY" update; then
+    mkdir -p "$HOME/.local/bin"
+    ct_stage=$(mktemp -d "$HOME/.local/bin/.agy-install.XXXXXX")
+    if ! (
+      mkdir -p "$ct_stage/home" "$ct_stage/bin"
+      curl -fsSL https://antigravity.google/cli/install.sh | HOME="$ct_stage/home" bash -s -- --dir "$ct_stage/bin"
+    ) || [ ! -x "$ct_stage/bin/agy" ]; then
+      rm -rf "$ct_stage"
+      die "Native Antigravity CLI binary update failed: $CT_AGY"
+    fi
+    mv -f "$ct_stage/bin/agy" "$CT_AGY"
     rm -rf "$ct_stage"
-    die "Native Antigravity CLI binary is missing: $CT_AGY"
   fi
-  mv -f "$ct_stage/bin/agy" "$CT_AGY"
-  rm -rf "$ct_stage"
   [ -x "$CT_AGY" ] || die "Native Antigravity CLI binary is missing: $CT_AGY"
   export CT_AGY
   "$CT_AGY" --version
@@ -328,7 +330,8 @@ install_plugins() {
     if ct_agy_plugins=$("$CT_AGY" plugin list --json 2>/dev/null) \
       && printf '%s\n' "$ct_agy_plugins" | "$CT_PY" -c 'import json, sys; data = json.load(sys.stdin); items = data if isinstance(data, list) else data.get("plugins", data.get("installed", [])); sys.exit(0 if any(isinstance(p, dict) and p.get("name") == "superpowers" for p in items) else 1)' 2>/dev/null; then
       ct_agy_plugin_status=installed
-    elif "$CT_AGY" plugin install superpowers@antigravity-plugins-partners; then
+    elif "$CT_AGY" plugin install superpowers@antigravity-plugins-partners 2>/dev/null \
+      || "$CT_AGY" plugin install https://github.com/obra/superpowers; then
       ct_agy_plugin_status=installed
       "$CT_PY" "$SCRIPT_DIR/lib/configure.py" status agy_superpowers_owned true
     fi

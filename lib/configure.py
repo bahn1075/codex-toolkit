@@ -127,11 +127,20 @@ def normalize_computer_use_path(doc):
 
 
 def write_agy_manifest(plugin_dir):
+    logo_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">\n'
+        '  <rect x="16" y="16" width="96" height="96" rx="20" fill="#1e293b"/>\n'
+        '  <path d="M44 48L60 64L44 80M68 80H86" stroke="#38bdf8" stroke-width="10" '
+        'stroke-linecap="round" stroke-linejoin="round" fill="none"/>\n'
+        '</svg>\n'
+    )
+    write(plugin_dir / 'assets/logo.svg', logo_svg, 0o644)
     manifest = {
         'name': AGY_PLUGIN_NAME,
         'displayName': 'Codex Toolkit',
         'version': '1.0.0',
         'description': 'Serena, Headroom, Mem0, and Ponytail integration managed by codex-toolkit.',
+        'logo': 'assets/logo.svg',
     }
     write(plugin_dir / 'plugin.json', json.dumps(manifest, indent=2) + '\n', 0o644)
 
