@@ -7,6 +7,9 @@ from urllib.error import HTTPError
 from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
+LITELLM_INFERENCE_MODEL = 'groq/qwen/qwen3.8-27b'
+LITELLM_EMBEDDING_MODEL = '@cf/baai/bge-m3'
+
 
 def api_base_url(api_url, endpoint):
     """Convert an OpenAI-compatible endpoint URL to its client base URL."""
@@ -19,6 +22,20 @@ def api_base_url(api_url, endpoint):
             path = path[:-len(suffix)]
             break
     return urlunparse((parsed.scheme, parsed.netloc, path or '/', '', '', '')).rstrip('/')
+
+
+def litellm_connection(settings):
+    """Read one OpenAI-compatible base URL and virtual key for both clients."""
+    url = settings.get('base_url', '').strip()
+    parsed = urlparse(url)
+    if (not parsed.hostname or parsed.username is not None or parsed.password is not None
+            or any(char.isspace() for char in url)):
+        raise ValueError('Enter a LiteLLM base URL without credentials, e.g. http://HOST:4000/v1')
+    base = api_base_url(url, ('/chat/completions', '/embeddings'))
+    api_key = settings.get('api_key', '').strip()
+    if not api_key or any(char.isspace() for char in api_key):
+        raise ValueError('A LiteLLM virtual API key is required')
+    return (base if base.endswith('/v1') else base + '/v1'), api_key
 
 
 def select_model(api_url, kind):

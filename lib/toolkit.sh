@@ -27,14 +27,14 @@ Usage: bash setup.sh [--resume] | bash setup.sh --llm
 Default: preserve ~/.codex, install/update Codex and Antigravity CLI (agy), and configure toolkit tools and Superpowers.
 --resume: rerun setup with the same data-preserving behavior.
 Tool policy: prefer an equivalent command-line tool, with Headroom, Serena and Mem0 available.
---llm: validate and save inference/embedding providers and primary/secondary connections.
+--llm: validate and save one LiteLLM URL and virtual key for Mem0.
 Setup stops your running Codex processes. Close Codex app and VS Code before running.
 Do not run with sudo.
 Optional environment settings (first installation):
   CT_HEADROOM_MODE=mcp             Headroom is available only as an MCP tool
   CT_AUTH=chatgpt                 this bundle uses manual ChatGPT login
-Mem0 uses Oracle AI Vector Search and user-specified inference/embedding APIs. Setup prompts
-for the Oracle wallet, database credentials, inference providers and local/Cloudflare embeddings;
+Mem0 uses Oracle AI Vector Search and LiteLLM. Setup prompts for the Oracle wallet,
+database credentials, LiteLLM base URL and virtual API key;
 secrets stay in ~/.codex/mem0.json (mode 600) and are never written to install-state or logs.
 EOF
 }
@@ -42,9 +42,14 @@ configure_llm() {
   [ "${CODEX_HOME:-$CT_HOME}" = "$CT_HOME" ] || die 'Custom CODEX_HOME detected; this bundle targets ~/.codex.'
   CT_PY="$CT_ROOT/venv/bin/python"
   [ -x "$CT_PY" ] && [ -f "$CT_HOME/mem0.json" ] || die 'Existing toolkit and Mem0 configuration required. Run setup.sh first.'
-  command -v curl >/dev/null || die 'curl is required to validate model API URLs.'
   acquire_lock
   CT_STAGE=llm-settings
+  if [ "$SCRIPT_DIR" != "$CT_ROOT/bundle" ]; then
+    local ct_file
+    for ct_file in model_api.py mem0_mcp.py configure.py toolkit.sh; do
+      cp "$SCRIPT_DIR/lib/$ct_file" "$CT_ROOT/bundle/lib/$ct_file"
+    done
+  fi
   "$CT_PY" "$SCRIPT_DIR/lib/configure.py" llm-settings
   note 'Model API settings saved. Restart Mem0/Codex/Antigravity to load the settings.'
 }

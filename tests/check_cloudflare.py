@@ -60,6 +60,7 @@ try:
         answers = ['frontier', 'gemini', 'custom-model', '', 'inference-secret'] * 2
         answers += ['frontier', 'cloudflare', 'a'*32, 'embedding-secret'] * 2
         with patch.object(configure, 'MEM0_CONFIG', config), \
+                patch.object(configure, 'litellm_model_settings', configure.mem0_model_settings), \
                 patch('builtins.input', side_effect=answers), \
                 patch.object(configure.urllib.request.OpenerDirector, 'open',
                     side_effect=configure.urllib.error.HTTPError('https://example.com', 429, 'Too Many Requests', {}, None)), \
@@ -90,6 +91,7 @@ try:
         def local_url(prompt, example, payload, existing, **kwargs):
             return base + ('/local/embeddings' if kwargs.get('response_kind') == 'embedding' else '/chat/completions')
         with patch.object(configure, 'MEM0_CONFIG', config), \
+                patch.object(configure, 'litellm_model_settings', configure.mem0_model_settings), \
                 patch('builtins.input', side_effect=['local', 'local', 'frontier', 'cloudflare',
                     'a'*32, 'new-secret', 'local', 'local']), \
                 patch.object(configure, 'mem0_api_url', side_effect=local_url), \

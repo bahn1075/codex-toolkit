@@ -19,7 +19,8 @@ from getpass import getpass
 
 import tomlkit
 from model_api import (select_model, validate_response, inference_connection,
-                       inference_request, inference_response, embedding_connection, embedding_request)
+                       inference_request, inference_response, embedding_connection, embedding_request,
+                       litellm_connection, LITELLM_INFERENCE_MODEL, LITELLM_EMBEDDING_MODEL)
 
 HOME = pathlib.Path.home()
 CODEX = HOME / '.codex'
@@ -550,7 +551,7 @@ def frontier_embedding(existing, role):
 
 
 def mem0_model_settings(data):
-    """Check model connections, allowing frontier HTTP 429, before atomic saving."""
+    """Check provider-specific settings for legacy Mem0 configurations."""
     for role in ('primary', 'secondary'):
         suffix = '_secondary' if role == 'secondary' else ''
         existing = inference_connection(data, secondary=role == 'secondary')
@@ -587,11 +588,53 @@ def mem0_model_settings(data):
     return data
 
 
+def litellm_model_settings(data):
+    """Validate both model routes before replacing the stored connection settings."""
+    existing = data.get('litellm', {})
+    default_url = existing.get('base_url', '')
+    hint = f' [{default_url}]' if default_url else ' (e.g. http://HOST:4000/v1)'
+    url = input(f'Mem0 LiteLLM API base URL{hint}: ').strip() or default_url
+    saved_key = existing.get('api_key', '') if url == default_url else ''
+    hint = ' (Enter to keep existing)' if saved_key else ''
+    key = getpass(f'Mem0 LiteLLM virtual API key{hint}: ').strip() or saved_key
+    base, key = litellm_connection({'base_url': url, 'api_key': key})
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    opener = urllib.request.build_opener(NoRedirect)
+    headers = {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'}
+    for endpoint, kind, payload in (
+            ('/chat/completions', 'llm', {'model': LITELLM_INFERENCE_MODEL,
+                'messages': [{'role': 'user', 'content': 'Reply with OK.'}],
+                'max_tokens': 64, 'reasoning_effort': 'none'}),
+            ('/embeddings', 'embedding', {'model': LITELLM_EMBEDDING_MODEL,
+                'input': ['ping'], 'encoding_format': 'float'})):
+        request = urllib.request.Request(base + endpoint, json.dumps(payload).encode(), headers)
+        try:
+            with opener.open(request, timeout=30) as response:
+                validate_response(json.load(response), kind)
+        except urllib.error.HTTPError as error:
+            raise ValueError(f'LiteLLM {endpoint} returned HTTP {error.code}. '
+                             f'Check access to {payload["model"]}.') from None
+        except OSError:
+            raise ValueError(f'Could not reach LiteLLM {endpoint}. Check the base URL and network.') from None
+
+    for kind in ('inference', 'embedding'):
+        for field in ('provider', 'api_url', 'model', 'api_key'):
+            for suffix in ('', '_secondary'):
+                data.pop(f'{kind}_{field}{suffix}', None)
+    data['litellm'] = {'base_url': base, 'api_key': key}
+    print('LiteLLM chat and 1024-dimensional embeddings validated.')
+    return data
+
+
 def llm_settings():
     """Update only model connection settings in an existing Mem0 configuration."""
     if not MEM0_CONFIG.is_file():
         raise RuntimeError('No Mem0 configuration found. Run setup.sh first.')
-    data = mem0_model_settings(json.loads(MEM0_CONFIG.read_text()))
+    data = litellm_model_settings(json.loads(MEM0_CONFIG.read_text()))
     write(MEM0_CONFIG, json.dumps(data, indent=2) + '\n')
 
 
@@ -601,7 +644,7 @@ def mem0_settings():
         data = json.loads(MEM0_CONFIG.read_text())
         if 'wallet_password' not in data:
             data['wallet_password'] = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
-        mem0_model_settings(data)
+        litellm_model_settings(data)
         write(MEM0_CONFIG, json.dumps(data, indent=2) + '\n')
         return
     wallet = pathlib.Path(input('Oracle wallet directory: ').strip()).expanduser()
@@ -611,7 +654,7 @@ def mem0_settings():
     password = getpass('Oracle database password: ')
     alias = input('Oracle TNS alias: ').strip()
     wallet_password = getpass('Oracle wallet password (leave blank for auto-login wallet): ')
-    model_settings = mem0_model_settings({})
+    model_settings = litellm_model_settings({})
     if not username or not password or not re.fullmatch(r'[A-Za-z0-9_.-]+', alias):
         raise RuntimeError('Username, password and a simple TNS alias are required.')
     if not re.search(rf'(?mi)^\s*{re.escape(alias)}\s*=', (wallet / 'tnsnames.ora').read_text()):

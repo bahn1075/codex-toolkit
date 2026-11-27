@@ -32,6 +32,7 @@ with tempfile.TemporaryDirectory() as tmp:
         prompts.append(prompt)
         return urls[len(prompts) - 1]
     with patch.object(configure, 'MEM0_CONFIG', config), \
+            patch.object(configure, 'litellm_model_settings', configure.mem0_model_settings), \
             patch.object(configure, 'model_choice', return_value='local'), \
             patch.object(configure, 'mem0_api_url', side_effect=validate):
         # Execute the real URL-only command, preserving Oracle and other settings.
@@ -45,6 +46,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert config.stat().st_mode & 0o777 == 0o600
     before = config.read_bytes()
     with patch.object(configure, 'MEM0_CONFIG', config), \
+            patch.object(configure, 'litellm_model_settings', configure.mem0_model_settings), \
             patch.object(configure, 'model_choice', return_value='local'), \
             patch.object(configure, 'mem0_api_url', side_effect=[urls[0], ValueError('invalid')]):
         try:
@@ -185,6 +187,7 @@ try:
             # Exercise all four real validation POSTs, including secondary re-entry.
             original = config.read_bytes()
             with patch.object(configure, 'MEM0_CONFIG', config), \
+                    patch.object(configure, 'litellm_model_settings', configure.mem0_model_settings), \
             patch.object(configure, 'model_choice', return_value='local'), \
                     patch('builtins.input', side_effect=[data['inference_api_url'],
                         'invalid-url', data['inference_api_url_secondary'],

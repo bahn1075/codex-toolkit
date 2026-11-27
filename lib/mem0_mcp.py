@@ -10,7 +10,8 @@ from urllib.error import HTTPError
 from openai import BadRequestError, DefaultHttpxClient
 from model_api import (inference_connection,
                        resolve_inference, inference_request, inference_response,
-                       embedding_connection, resolve_embedding, embedding_request)
+                       embedding_connection, resolve_embedding, embedding_request,
+                       litellm_connection, LITELLM_INFERENCE_MODEL, LITELLM_EMBEDDING_MODEL)
 
 # Use the HTTP implementation selected by this installed OpenAI SDK (httpx or httpx2).
 httpx = importlib.import_module(DefaultHttpxClient.__mro__[1].__module__.split('.')[0])
@@ -74,34 +75,44 @@ class ModelFailoverTransport(httpx.BaseTransport):
 
 def memory():
     data = json.loads(CONFIG.read_text(encoding="utf-8"))
-    try:
-        primary = inference_connection(data)
-        secondary = inference_connection(data, secondary=True)
-        if not primary['api_url']:
-            raise KeyError('inference_api_url')
+    use_litellm = 'litellm' in data
+    if use_litellm:
+        base_url, gateway_key = litellm_connection(data['litellm'])
+        inference_base_url = embedding_base_url = base_url
+        inference_model = LITELLM_INFERENCE_MODEL
+        embedding_model = LITELLM_EMBEDDING_MODEL
+        inference_key = embedding_key = gateway_key
+    else:
         try:
-            inference_base_url, inference_model = resolve_inference(primary)
-        except HTTPError:
-            raise
-        except (OSError, RemoteDisconnected):
-            if not secondary['api_url']:
+            primary = inference_connection(data)
+            secondary = inference_connection(data, secondary=True)
+            if not primary['api_url']:
+                raise KeyError('inference_api_url')
+            try:
+                inference_base_url, inference_model = resolve_inference(primary)
+            except HTTPError:
                 raise
-            inference_base_url, inference_model = resolve_inference(secondary)
-        embedding_primary = embedding_connection(data)
-        embedding_secondary = embedding_connection(data, secondary=True)
-        selected_embedding = embedding_primary
-        try:
-            embedding_base_url, embedding_model = resolve_embedding(selected_embedding)
-        except HTTPError:
-            raise
-        except (OSError, RemoteDisconnected):
-            if not embedding_secondary['api_url']:
+            except (OSError, RemoteDisconnected):
+                if not secondary['api_url']:
+                    raise
+                inference_base_url, inference_model = resolve_inference(secondary)
+            embedding_primary = embedding_connection(data)
+            embedding_secondary = embedding_connection(data, secondary=True)
+            selected_embedding = embedding_primary
+            try:
+                embedding_base_url, embedding_model = resolve_embedding(selected_embedding)
+            except HTTPError:
                 raise
-            selected_embedding = embedding_secondary
-            embedding_base_url, embedding_model = resolve_embedding(selected_embedding)
-    except KeyError as error:
-        raise RuntimeError(
-            'Mem0 model API URLs are missing. Run setup.sh --resume to configure them.') from error
+            except (OSError, RemoteDisconnected):
+                if not embedding_secondary['api_url']:
+                    raise
+                selected_embedding = embedding_secondary
+                embedding_base_url, embedding_model = resolve_embedding(selected_embedding)
+        except KeyError as error:
+            raise RuntimeError(
+                'Mem0 model API URLs are missing. Run setup.sh --llm to configure them.') from error
+        inference_key = 'local-no-key'
+        embedding_key = selected_embedding.get('api_key') or 'local-no-key'
     wallet = data["wallet_dir"]
     os.environ["TNS_ADMIN"] = wallet
     connection_params = {
@@ -113,7 +124,7 @@ def memory():
     store = Memory.from_config({
         "llm": {"provider": "lmstudio", "config": {
             "model": inference_model, "lmstudio_base_url": inference_base_url,
-            "api_key": "local-no-key",
+            "api_key": inference_key,
             "lmstudio_response_format": {"type": "json_schema", "json_schema": {
                 "name": "mem0_facts", "schema": {
                     "type": "object", "properties": {"memory": {"type": "array",
@@ -125,13 +136,17 @@ def memory():
         }},
         "embedder": {"provider": "openai", "config": {
             "model": embedding_model, "openai_base_url": embedding_base_url,
-            "api_key": selected_embedding.get('api_key') or "local-no-key", "embedding_dims": 1024,
+            "api_key": embedding_key,
+            # BGE-M3 returns 1024 dimensions and rejects the optional OpenAI parameter.
+            "embedding_dims": None if use_litellm else 1024,
         }},
         "vector_store": {"provider": "oracledb", "config": {
             "collection_name": "CODEX_MEMORIES", "embedding_model_dims": 1024,
             "connection_params": connection_params,
         }},
     })
+    if use_litellm:
+        return store
     for key, provider, kind in (
             ('inference', 'llm', 'llm'), ('embedding', 'embedding_model', 'embedding')):
         secondary_url = data.get(key + '_api_url_secondary')

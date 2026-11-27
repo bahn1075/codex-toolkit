@@ -450,6 +450,7 @@ try:
                    'frontier', 'anthropic', 'claude-test', base + '/anthropic/v1/messages', 'anthropic-secret',
                    'local', 'local']
         with patch.object(configure, 'MEM0_CONFIG', target), \
+                patch.object(configure, 'litellm_model_settings', configure.mem0_model_settings), \
                 patch('builtins.input', side_effect=answers), \
                 patch.object(configure, 'getpass', side_effect=AssertionError('API key must use visible input')), \
                 patch.object(configure, 'mem0_api_url', side_effect=lambda p, e, pl, existing, **kw: existing), \
@@ -521,6 +522,7 @@ try:
         before = target.read_bytes()
         status = 401
         with patch.object(configure, 'MEM0_CONFIG', target), \
+                patch.object(configure, 'litellm_model_settings', configure.mem0_model_settings), \
                 patch('builtins.input', side_effect=['', '', '', '', '', EOFError('cancel')]), \
                 contextlib.redirect_stdout(io.StringIO()) as output:
             try:
@@ -538,6 +540,7 @@ try:
                    'frontier', 'cloudflare', 'a' * 32, '@cf/openai/gpt-oss-20b',
                    base + '/cloudflare/v1', 'cloudflare-secret', 'local', 'local']
         with patch.object(configure, 'MEM0_CONFIG', target), \
+                patch.object(configure, 'litellm_model_settings', configure.mem0_model_settings), \
                 patch('builtins.input', side_effect=answers), \
                 patch.object(configure, 'mem0_api_url', side_effect=lambda p, e, pl, existing, **kw: existing), \
                 contextlib.redirect_stdout(io.StringIO()):
@@ -566,6 +569,7 @@ try:
                    'frontier', 'groq', 'openai/gpt-oss-20b', base + '/groq/v1', 'groq-secret',
                    'local', 'local']
         with patch.object(configure, 'MEM0_CONFIG', target), \
+                patch.object(configure, 'litellm_model_settings', configure.mem0_model_settings), \
                 patch('builtins.input', side_effect=answers), \
                 patch.object(configure, 'mem0_api_url', side_effect=lambda p, e, pl, existing, **kw: existing), \
                 contextlib.redirect_stdout(io.StringIO()):
@@ -591,6 +595,7 @@ try:
 
         # Returning both inference roles to local removes stale frontier credentials.
         with patch.object(configure, 'MEM0_CONFIG', target), \
+                patch.object(configure, 'litellm_model_settings', configure.mem0_model_settings), \
                 patch.object(configure, 'model_choice', return_value='local'), \
                 patch.object(configure, 'mem0_api_url', return_value=base + '/local/v1/chat/completions'), \
                 contextlib.redirect_stdout(io.StringIO()):
