@@ -10,9 +10,10 @@ if [ "$#" = 1 ]; then
     --llm) configure_llm; exit 0 ;;
   esac
 fi
+ct_setup_mode=''
 for option in "$@"; do
   case "$option" in
-    --resume) ;;
+    --update) ct_setup_mode=--update ;;
     --cli-first|--cli-only) ;;
     *) die "Unknown option: $option" ;;
   esac
@@ -23,7 +24,7 @@ snapshot_configuration
 bootstrap
 install_packages
 configure_core
-install_mem0
+install_mem0 "$ct_setup_mode"
 configure_headroom
 install_plugins
 finish

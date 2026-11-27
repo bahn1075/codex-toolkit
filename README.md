@@ -45,7 +45,7 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 - 설치 디렉터리는 `~/.codex` 밖에 두고 일반 사용자로 실행합니다. 스크립트 전체를
   `sudo`로 실행하지 마세요. Linux 빌드 도구 자동 설치 단계에서만 `sudo`를 사용하며
   비밀번호를 요구할 수 있습니다. 설치 후 명령을 다시 점검하며 실패하면 중단합니다.
-- Codex 앱과 VS Code를 닫은 뒤 별도 터미널에서 설치를 실행하세요. `setup.sh`와 `--resume`은
+- Codex 앱과 VS Code를 닫은 뒤 별도 터미널에서 설치를 실행하세요. `setup.sh`와 `--update`는
   시작할 때 현재 사용자의 Codex 프로세스에 종료 신호(SIGTERM)를 보냅니다. `update.sh`를
   실행하기 전에는 Codex CLI도 종료하세요.
 
@@ -54,7 +54,8 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 | 명령 | 용도 |
 |---|---|
 | `bash setup.sh` | 기존 로그인·대화 기록을 유지하며 설치 또는 갱신 |
-| `bash setup.sh --resume` | 기존 `~/.codex`를 유지하면서 실패·누락된 설치와 설정을 다시 맞춤 |
+| `bash setup.sh --update` | 저장된 Mem0 연결을 유지하면서 툴킷과 패키지를 업데이트하거나 복구 |
+| `bash setup.sh --llm` | LiteLLM 주소와 가상 키만 확인하거나 변경 |
 | `bash update.sh` | 설치된 툴킷과 패키지를 업데이트하고 설정을 재적용 |
 | `bash remove.sh --dry-run` | 삭제 대상과 실행할 제거 명령만 확인 |
 | `bash remove.sh` | toolkit 구성요소·Codex/Antigravity CLI와 설정 연동 제거 |
@@ -65,14 +66,14 @@ Headroom은 MCP 도구로만 동작하며 Codex 모델 요청을 프록시하지
 1. 운영체제, 필수 명령과 실행 중인 Codex 프로세스를 검사합니다.
 2. 공식 native installer로 Codex(`~/.local/bin/codex`)와 Antigravity CLI(`~/.local/bin/agy`)를 설치하거나 업데이트하고(기존 Homebrew Codex formula/cask는 제거), MCP 의존성과 등록된 Serena 프로젝트의 언어 서버를 다시 맞춥니다.
 3. `~/.codex/config.toml`, 전역 `AGENTS.md`, shell alias와 Antigravity 전역 플러그인(`~/.gemini/config/plugins/codex-toolkit/`의 `plugin.json`, `mcp_config.json`, `rules/AGENTS.md`)을 구성합니다.
-4. Mem0 연결 정보와 Codex·Antigravity(`SessionStart`/`Stop`) hook, Headroom의 token/balanced MCP 모드를 구성합니다. Superpowers는 Codex(`superpowers@openai-curated-remote`)와 Antigravity(`superpowers@antigravity-plugins-partners`)에 각각 설치합니다.
+4. Mem0 연결 설정이 있으면 재사용하고 Codex·Antigravity(`SessionStart`/`Stop`) hook과 Headroom의 token/balanced MCP 모드를 구성합니다. Superpowers는 Codex(`superpowers@openai-curated-remote`)와 Antigravity(`superpowers@antigravity-plugins-partners`)에 각각 설치합니다.
 5. 설정 유효성, 모든 활성 MCP의 실제 시작·도구 목록, Antigravity 플러그인 검증(`agy plugin validate`) 및 최종 상태를 검사합니다.
 
 Codex native CLI는 `~/.local/bin/codex`, Antigravity CLI는 `~/.local/bin/agy`에 설치됩니다.
 
 ### 기본 도구 정책
 
-`setup.sh`, `setup.sh --resume`, `update.sh`는 CLI 우선 지침을 기본으로 설치합니다.
+`setup.sh`, `setup.sh --update`, `update.sh`는 CLI 우선 지침을 기본으로 설치합니다.
 이전 `--cli-first`와 `--cli-only` 옵션을 사용한 명령도 같은 기본 동작을 수행합니다.
 
 전역 `AGENTS.md`는 Codex가 작업에 맞는 CLI 후보를 찾고, `command -v`로 설치 여부를
@@ -104,7 +105,7 @@ Codex의 `/mcp`에서 연결 상태를 확인하세요. 자동 메모리를 사�
 Mem0의 `SessionStart`·`Stop`·`SessionEnd` hook을 검토하고 신뢰해야 합니다.
 
 정상 완료된 `setup.sh`는 Mem0 구성과 Headroom 읽기 캐시 검증까지 마친 상태이므로
-`--resume`을 다시 실행할 필요가 없습니다.
+`--update`를 다시 실행할 필요가 없습니다.
 
 비대화형 실행에서 로그인이 없거나 Superpowers 설치가 실패하면 나머지 MCP 검사는 계속되지만,
 최종 결과는 `Partial setup`과 종료 코드 1로 표시합니다. 인증 또는 워크스페이스 관리자 허용
@@ -116,14 +117,13 @@ codex login
 codex plugin add superpowers@openai-curated-remote
 ```
 
-### `--resume`의 역할
+### `--update`의 역할
 
-`--resume`은 실패한 한 줄에서 그대로 이어가는 옵션이 아니라, 기본 설치와 같이
-기존 데이터를 유지하며 설치 전체를 다시 조정하는 복구 모드입니다.
+`--update`는 기존 데이터를 유지하면서 툴킷 바이너리, 모듈과 패키지를 갱신하고 설치 구성을 다시 적용합니다.
 
 - `~/.codex`를 이동하거나 새로 만들지 않아 로그인, 대화 기록과 사용자 설정을 유지합니다.
 - 설치 상태를 재사용하면서 패키지, MCP 실행 경로, 전역 지침과 hook을 다시 확인합니다.
-- Mem0 설정 파일이 없으면 Oracle 연결 정보와 모델 API URL을 다시 입력받고, 있으면 기존 값을 재사용합니다.
+- `~/.codex/mem0.json`을 그대로 사용합니다. 파일이 없으면 Mem0 연결 입력을 건너뛰고 나머지 업데이트를 진행합니다.
 - 이전 버전의 Graft MCP 등록·실행 파일과 toolkit 전용 npm 패키지를 정리합니다.
 - 모든 설치 단계를 다시 실행하므로 네트워크가 필요하고 다소 시간이 걸릴 수 있습니다.
 
@@ -131,35 +131,34 @@ codex plugin add superpowers@openai-curated-remote
 
 - 최초 설치가 오류나 강제 종료로 중단된 경우
 - `Partial setup`이 표시된 경우
-- Mem0 입력을 완료하지 못했거나 hook/MCP 등록을 다시 적용해야 하는 경우
+- 기존 Mem0의 hook이나 MCP 등록을 다시 적용해야 하는 경우
 - uv 등 실행 환경의 경로가 바뀐 경우
 - Headroom 설정을 복구한 경우
 
 ```bash
-bash setup.sh --resume
+bash setup.sh --update
 ```
 
 원본 설치 디렉터리가 없다면 설치 중 복사된 스크립트를 사용합니다.
 
 ```bash
-bash ~/.codex/toolkit/bundle/setup.sh --resume
+bash ~/.codex/toolkit/bundle/setup.sh --update
 ```
 
-설치 상태가 아직 없는 경우에도 `--resume`으로 다시 시작할 수 있습니다.
+설치 상태가 아직 없는 경우에도 `--update`로 다시 시작할 수 있습니다.
 
 ### 설치 후 Mem0 설정 완료
 
 최초 설치가 Mem0 단계 전에 멈췄거나 `~/.codex/mem0.json`이 아직 없다면
-`--resume`을 실행해 Oracle 설정 입력과 MCP·hook 등록을 완료해야 합니다.
+옵션 없이 `setup.sh`를 실행해 Oracle과 LiteLLM 연결 설정을 완료하세요.
 
 ```bash
-bash ~/.codex/toolkit/bundle/setup.sh --resume
+bash ~/.codex/toolkit/bundle/setup.sh
 codex-doctor
 ```
 
-기존 `mem0.json`의 Oracle 연결 정보는 `--resume`에서 유지합니다.
-모델 연결 정보는 다시 확인하며 Enter로 기존 값을 유지할 수 있습니다.
-모델 연결 정보만 바꾸려면 `bash setup.sh --llm`을 실행하세요.
+기존 `mem0.json`의 Oracle 연결 정보와 모델 연결은 설치 및 업데이트에서 그대로 유지합니다.
+모델 연결 정보만 확인하거나 바꾸려면 `bash setup.sh --llm`을 실행하세요.
 완료 후 Codex를 다시 시작해 `/mcp`에서 `mem0`,
 `/hooks`에서 세 hook을 확인합니다. 기존 설치에 `Stop`이 없다면 업데이트된 설치 번들에서 아래 명령으로
 요청 완료 시 자동 저장을 추가한 뒤 Codex를 다시 시작하고 새 hook을 검토·신뢰하세요.
@@ -197,11 +196,11 @@ VS Code 확장도 제거합니다. 이전 버전은 확장 소유권을 기록�
 
 업데이트는 사용자 설정과 Mem0 연결 정보를 보존하며, 실행 전에 설정을
 `~/.codex-backups/update-*`에 백업합니다. 일반적인 버전 갱신은 `update.sh`,
-설치 실패나 구성 복구는 `setup.sh --resume`을 사용하세요.
+설치 실패나 구성 복구는 `setup.sh --update`로 진행하세요.
 
 ## Mem0
 
-`setup.sh`와 `setup.sh --resume`은 Mem0의 LiteLLM API 기본 주소와 가상 API 키를 입력받습니다.
+최초 설치의 `setup.sh`와 모델 설정 전용 `setup.sh --llm`에서 LiteLLM API 기본 주소와 가상 API 키를 입력합니다.
 같은 주소와 키로 추론은 `/v1/chat/completions`, 임베딩은 `/v1/embeddings`를 사용합니다.
 
 | 용도 | LiteLLM 모델 ID |
@@ -280,19 +279,19 @@ tail -f ~/.codex/toolkit/mem0-sessions/manual-import-errors.*
 
 ## Headroom 모드
 
-Headroom은 MCP 도구로만 사용합니다. `setup.sh`와 `setup.sh --resume`은 기존
+Headroom은 MCP 도구로만 사용합니다. `setup.sh`와 `setup.sh --update`는 기존
 Headroom 상주 프록시와 Codex provider 리디렉션을 제거해 OpenAI 직접 연결을 유지하고,
 MCP 서버에는 `HEADROOM_MODE=token`과 `HEADROOM_SAVINGS_PROFILE=balanced`를 설정합니다.
 큰 로그·검색·JSON 결과는 가능하면 도구 호출 안에서 Headroom으로 압축한 뒤 압축 결과와
 복원 hash만 Codex에 반환하도록 전역 정책을 설치합니다. 등록만으로 자동 압축되지는 않습니다.
 `headroom_read`도 활성화하여 변경 없는 반복 파일 읽기는 캐시 marker로 처리합니다.
 정확한 원문·편집·인용에는 `headroom_retrieve`, 변경 후 읽기에는 `fresh=true`를 사용합니다.
-`setup.sh`와 `setup.sh --resume`은 경로 입력 없이 사용자 전역 설정인
+`setup.sh`와 `setup.sh --update`는 경로 입력 없이 사용자 전역 설정인
 `~/.codex/config.toml`에 Headroom을 등록합니다. 기본적으로 `headroom_read`는
 Codex가 MCP 서버를 시작할 때 전달한 세션의 작업 디렉터리와 그 하위를 읽습니다.
 작업 디렉터리가 홈 디렉터리 또는 파일시스템 루트이면 Headroom은 기본 읽기 범위를 제공하지 않습니다.
 이전 설치가 추가한 `HEADROOM_MCP_READ_ROOTS` 값이 홈 디렉터리, `~/app`, `/app`의
-기본 목록과 일치하면 설치 및 `--resume`에서 자동으로 삭제합니다. 사용자 지정 목록은
+기본 목록과 일치하면 설치 및 `--update`에서 자동으로 삭제합니다. 사용자 지정 목록은
 보존되며 세션 작업 디렉터리 대신 해당 경로를 사용합니다.
 
 설치와 업데이트는 OS/아키텍처 및 Linux PCI의 GPU 제조사를 감지합니다.

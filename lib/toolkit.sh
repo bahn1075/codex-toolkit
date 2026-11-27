@@ -23,9 +23,9 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '\n%s\n' "$*"; }
 usage() {
   cat <<'EOF'
-Usage: bash setup.sh [--resume] | bash setup.sh --llm
+Usage: bash setup.sh [--update] | bash setup.sh --llm
 Default: preserve ~/.codex, install/update Codex and Antigravity CLI (agy), and configure toolkit tools and Superpowers.
---resume: rerun setup with the same data-preserving behavior.
+--update: update and repair toolkit components using existing Mem0 settings without model input.
 Tool policy: prefer an equivalent command-line tool, with Headroom, Serena and Mem0 available.
 --llm: validate and save one LiteLLM URL and virtual key for Mem0.
 Setup stops your running Codex processes. Close Codex app and VS Code before running.
@@ -128,7 +128,7 @@ acquire_lock() {
   mkdir "$HOME/.codex-toolkit-setup.lock" 2>/dev/null || die 'Setup/update lock exists. Check for an active installer before removing the stale lock.'
   CT_LOCK_HELD=1
   trap cleanup EXIT
-  trap 'printf "ERROR in stage %s (line %s). Re-run setup.sh --resume after fixing it.\n" "$CT_STAGE" "$LINENO" >&2' ERR
+  trap 'printf "ERROR in stage %s (line %s). Re-run setup.sh --update after fixing it.\n" "$CT_STAGE" "$LINENO" >&2' ERR
 }
 cleanup() {
   if [ "$CT_LOCK_HELD" = 1 ]; then rmdir "$HOME/.codex-toolkit-setup.lock" 2>/dev/null || true; fi
@@ -294,8 +294,14 @@ configure_core() {
 }
 install_mem0() {
   CT_STAGE=mem0
-  note 'Configuring Mem0 with Oracle AI Vector Search, inference APIs and local/Cloudflare embeddings.'
-  "$CT_PY" "$SCRIPT_DIR/lib/configure.py" mem0-settings
+  if [ ! -f "$CT_HOME/mem0.json" ]; then
+    if [ "${1:-}" = --update ]; then
+      note 'Mem0 connection setup is pending. Run bash setup.sh to configure it for the first time.'
+      return
+    fi
+    note 'Configuring Mem0 with Oracle AI Vector Search and LiteLLM.'
+    "$CT_PY" "$SCRIPT_DIR/lib/configure.py" mem0-settings
+  fi
   "$CT_PY" "$SCRIPT_DIR/lib/configure.py" mem0-hooks
   "$CT_PY" "$SCRIPT_DIR/lib/configure.py" status mem0_install configured
 }
@@ -358,7 +364,7 @@ finish() {
     "$CT_AGY" plugin validate "$HOME/.gemini/config/plugins/codex-toolkit"
   fi
   if [ "$CT_FAILURES" -gt 0 ]; then
-    printf 'Partial setup: %s stage(s) incomplete. Follow the reported recovery commands or rerun bash setup.sh --resume.\n' "$CT_FAILURES" >&2
+    printf 'Partial setup: %s stage(s) incomplete. Follow the reported recovery commands or rerun bash setup.sh --update.\n' "$CT_FAILURES" >&2
     exit 1
   fi
   note 'Install/configuration pass finished. The MCP status above is the final setup check.'

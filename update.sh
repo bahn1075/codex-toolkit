@@ -15,7 +15,7 @@ bootstrap
 snapshot_configuration
 install_packages
 configure_core
-install_mem0
+install_mem0 --update
 configure_headroom
 install_plugins
 finish

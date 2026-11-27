@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory() as tmp:
     for has_marker in (False, True):
         if has_marker:
             marker.write_text('/previous-backup\n')
-        result = subprocess.run(['bash', str(root / 'setup.sh'), '--resume'], capture_output=True, text=True)
+        result = subprocess.run(['bash', str(root / 'setup.sh'), '--update'], capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
         assert 'RESUMED' in result.stdout
         assert not (home / 'toolkit/venv').exists()
